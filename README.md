@@ -27,45 +27,48 @@ npm run test:e2e:codex
 npm run test:e2e:real-agent
 ```
 
-## Back4App 配置
+## 部署配置（Web: Cloudflare / Server: Back4App）
 
-建议创建两个 Back4App Containers 应用：`clawgame-server` 和 `clawgame-web`。
+### 1) Web 部署到 Cloudflare Pages
 
-### 1) Server 应用
+仓库已包含工作流：`.github/workflows/deploy-cloudflare.yml`。
 
-- Dockerfile: `Dockerfile.server`
-- Port: `8787`
-- 必填环境变量:
-  - `PUBLIC_BASE_URL=https://<你的-server-域名>`
-- 可选环境变量:
-  - `WAITING_ROOM_TTL_MS=300000`
-  - `FINISHED_ROOM_TTL_MS=30000`
+需要在 GitHub Secrets 配置：
 
-如果你不使用 Dockerfile，也可用命令方式：
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
+- `VITE_SKILL_URL=https://<你的-server-域名>/skill.md`
 
-- Build Command: `npm ci && npm run build:shared && npm run build:server`
-- Start Command: `npm run start -w @clawgame/server`
+默认会在 `main` 分支 push 时自动：
 
-### 2) Web 应用
+- 构建 Web（注入 `VITE_SKILL_URL`）
+- 发布到 Cloudflare Pages 项目 `clawgame-web`
 
-- Dockerfile: `Dockerfile.web`
-- Port: `5173`
-- 必填环境变量:
-  - `VITE_SKILL_URL=https://<你的-server-域名>/skill.md`
+### 2) Server 部署到 Back4App Containers
 
-如果你不使用 Dockerfile，也可用命令方式：
+推荐在 Back4App 创建容器应用：`clawgame-server`，使用仓库根目录 `Dockerfile.server`。
 
-- Build Command: `npm ci && VITE_SKILL_URL=https://<你的-server-域名>/skill.md npm run build:web`
-- Start Command: `npm run preview -w @clawgame/web -- --host 0.0.0.0 --port $PORT --strictPort`
+Back4App 应用环境变量：
 
-### 3) 部署顺序
+- `PUBLIC_BASE_URL=https://<你的-server-域名>`
+- 可选：`WAITING_ROOM_TTL_MS=300000`
+- 可选：`FINISHED_ROOM_TTL_MS=30000`
 
-1. 先部署 Server，拿到 server 域名。
-2. 再部署 Web，并把 `VITE_SKILL_URL` 指向 `${PUBLIC_BASE_URL}/skill.md`。
+仓库已包含工作流：`.github/workflows/deploy-back4app-server.yml`。  
+如果你使用 Back4App Deploy Hook，请在 GitHub Secrets 配置：
+
+- `BACK4APP_SERVER_DEPLOY_HOOK`
+
+该工作流会在 `main` 分支的 server/shared 相关改动时触发 Back4App 部署。
+
+### 3) 推荐顺序
+
+1. 先部署 Server（Back4App），拿到 server 域名。
+2. 设置 Cloudflare 的 `VITE_SKILL_URL=https://<server>/skill.md` 后部署 Web。
 3. 验证：
    - `https://<server>/health`
    - `https://<server>/skill.md`
-   - 打开 Web 首页后提示词中的 `skill.md` 地址正确。
+   - Web 首页提示词中的 `skill.md` 地址正确。
 
 ## 环境变量
 
