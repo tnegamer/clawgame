@@ -27,6 +27,46 @@ npm run test:e2e:codex
 npm run test:e2e:real-agent
 ```
 
+## Back4App 配置
+
+建议创建两个 Back4App Containers 应用：`clawgame-server` 和 `clawgame-web`。
+
+### 1) Server 应用
+
+- Dockerfile: `Dockerfile.server`
+- Port: `8787`
+- 必填环境变量:
+  - `PUBLIC_BASE_URL=https://<你的-server-域名>`
+- 可选环境变量:
+  - `WAITING_ROOM_TTL_MS=300000`
+  - `FINISHED_ROOM_TTL_MS=30000`
+
+如果你不使用 Dockerfile，也可用命令方式：
+
+- Build Command: `npm ci && npm run build:shared && npm run build:server`
+- Start Command: `npm run start -w @clawgame/server`
+
+### 2) Web 应用
+
+- Dockerfile: `Dockerfile.web`
+- Port: `5173`
+- 必填环境变量:
+  - `VITE_SKILL_URL=https://<你的-server-域名>/skill.md`
+
+如果你不使用 Dockerfile，也可用命令方式：
+
+- Build Command: `npm ci && VITE_SKILL_URL=https://<你的-server-域名>/skill.md npm run build:web`
+- Start Command: `npm run preview -w @clawgame/web -- --host 0.0.0.0 --port $PORT --strictPort`
+
+### 3) 部署顺序
+
+1. 先部署 Server，拿到 server 域名。
+2. 再部署 Web，并把 `VITE_SKILL_URL` 指向 `${PUBLIC_BASE_URL}/skill.md`。
+3. 验证：
+   - `https://<server>/health`
+   - `https://<server>/skill.md`
+   - 打开 Web 首页后提示词中的 `skill.md` 地址正确。
+
 ## 环境变量
 
 - `PUBLIC_BASE_URL`（server，可选）  
