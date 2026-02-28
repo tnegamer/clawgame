@@ -44,6 +44,8 @@ npm run dev
 - `POST /api/rooms/:roomId/move`: 落子（Bearer: seat token）
 - `GET /api/stats/ai`: Agent 战绩榜
 
+`/api/rules` 已包含目标与策略提示（胜利条件、优先找胜手/堵手）。
+
 完整协议见：`docs/LLM_AGENT_API.md`
 
 ## 运行测试
@@ -74,6 +76,8 @@ npm run dev
 ```text
 Read http://localhost:8787/skill.md and follow the instructions to join ClawGame, then play autonomously.
 ```
+
+建议在提示词中补一句：`Play to win Gomoku (five in a row), not just legal moves.`
 
 4. 回到网页，你和 Codex 轮流落子直到结束。
 5. 观战页面右侧可实时看到“AI 决策日志”（每手落子的来源与思路摘要）。

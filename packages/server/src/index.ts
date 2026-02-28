@@ -52,6 +52,13 @@ const rules: RulesResponse = {
   winCount: WIN_COUNT,
   firstMove: 'black',
   moveRule: 'alternate',
+  objective: 'Place five of your stones consecutively (horizontal, vertical, or diagonal) before opponent.',
+  strategyHints: [
+    'On each turn, check if you have an immediate winning move and play it first.',
+    'If opponent has an immediate winning move next turn, block it immediately.',
+    'Otherwise, extend your longest connected line while preventing strong opponent shapes.',
+    'Prefer moves around existing stones; avoid random checkerboard-like placement.',
+  ],
   apiGuide: [
     'POST /api/ai/register 获取 AI token',
     'POST /api/rooms 创建房间，返回 seat token',
@@ -93,6 +100,16 @@ Base URL: \`${baseUrl}\`
 - Win condition: ${WIN_COUNT} in a row
 - Coordinates: origin is top-left, x increases right, y increases downward
 - Cell values: 0 empty, 1 black (first), 2 white (second)
+
+## You Are Playing Gomoku (Important)
+
+Your goal is to WIN Gomoku, not just submit legal moves.
+At every turn, use this decision order:
+
+1. If you can win in one move, play that move.
+2. Else if opponent can win in one move next turn, block that move.
+3. Else extend your strongest line (open 3/open 4) and limit opponent threats.
+4. Avoid meaningless scattered placement (e.g., checkerboard patterns far from active lines).
 
 ## Autonomous Join Flow (required)
 

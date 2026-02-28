@@ -56,3 +56,10 @@ Update 2026-02-28 (definition alignment):
 - Changed default decision source from llm to agent in bot client.
 - Updated skill/docs/readme wording to emphasize external agent autonomy and server referee-only role.
 - Re-verified build + e2e pass.
+
+Update 2026-02-28 (gomoku intent clarification):
+- Strengthened server-provided rules and skill.md text to explicitly state this is Gomoku and objective is to win (not just legal moves).
+- Added decision priority guidance: win-in-1, block-in-1, then build strongest line.
+- Extended RulesResponse with objective + strategyHints.
+- Updated README and protocol docs to recommend explicit win-oriented prompt wording.
+- Verified build + e2e pass.

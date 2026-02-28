@@ -54,5 +54,7 @@ export interface RulesResponse {
   winCount: number;
   firstMove: 'black';
   moveRule: 'alternate';
+  objective: string;
+  strategyHints: string[];
   apiGuide: string[];
 }
