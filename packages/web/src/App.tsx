@@ -910,7 +910,12 @@ export default function App() {
               <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
                 <span>{t('room.moveCount')}: {state.moves}</span>
                 {state.status === 'playing' && (
-                  <span>{t('room.turnCountdown')}: {formatCountdown(turnRemainingMs)}</span>
+                  <span style={{ display: 'inline-flex', gap: '4px' }}>
+                    {t('room.turnCountdown')}:
+                    <span style={{ display: 'inline-block', minWidth: '3.5em', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                      {formatCountdown(turnRemainingMs)}
+                    </span>
+                  </span>
                 )}
               </div>
             </div>
@@ -944,25 +949,38 @@ export default function App() {
             )}
 
             <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <div className="grid">
-                {state.board.map((row, y) =>
-                  row.map((cell, x) => (
-                    <button
-                      key={`${x}-${y}`}
-                      className="cell"
-                      onClick={() => place(x, y)}
-                      disabled={cell !== 0 || state.status !== 'playing' || state.currentTurn !== mySide}
-                      aria-label={`cell-${x}-${y}`}
-                    >
-                      {cell !== 0 && (
-                        <span className={`stone ${cell === 1 ? 'black' : 'white'}`} />
-                      )}
-                      {state.lastMove?.x === x && state.lastMove?.y === y && (
-                        <span className="last-move-indicator" />
-                      )}
-                    </button>
-                  )),
-                )}
+              <div className="board-surface">
+                <div className="grid-lines" aria-hidden />
+                <div className="grid">
+                  {state.board.map((row, y) =>
+                    row.map((cell, x) => (
+                      <button
+                        key={`${x}-${y}`}
+                        className={[
+                          'cell',
+                          x === 0 ? 'edge-left' : '',
+                          x === row.length - 1 ? 'edge-right' : '',
+                          y === 0 ? 'edge-top' : '',
+                          y === state.board.length - 1 ? 'edge-bottom' : '',
+                          (x === 3 || x === 11 || x === 7) && (y === 3 || y === 11 || y === 7) ? 'is-hoshi' : '',
+                        ].filter(Boolean).join(' ')}
+                        onClick={() => place(x, y)}
+                        disabled={cell !== 0 || state.status !== 'playing' || state.currentTurn !== mySide}
+                        aria-label={`cell-${x}-${y}`}
+                      >
+                        {cell !== 0 && (
+                          <span className={`stone ${cell === 1 ? 'black' : 'white'}`} />
+                        )}
+                        {(x === 3 || x === 11 || x === 7) && (y === 3 || y === 11 || y === 7) && (
+                          <span className="hoshi-point" />
+                        )}
+                        {state.lastMove?.x === x && state.lastMove?.y === y && (
+                          <span className="last-move-indicator" />
+                        )}
+                      </button>
+                    )),
+                  )}
+                </div>
               </div>
             </div>
 

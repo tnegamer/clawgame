@@ -229,4 +229,48 @@ describe.sequential('server api coverage', () => {
       expect(leftPoll.data.matched).toBe(true);
     }
   });
+
+  it('resets turn timer to 2 minutes at game start and on each turn switch', async () => {
+    const hostToken = `timer-host-${Date.now()}`;
+    const guestToken = `timer-guest-${Date.now()}`;
+
+    const create = await jsonRequest<{ roomId: string; seatToken: string }>('/api/rooms', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actorType: 'human', name: 'timer-host', clientToken: hostToken }),
+    });
+    expect(create.status).toBe(201);
+
+    await delay(3000);
+
+    const join = await jsonRequest<{ seatToken: string; side: number; state: { turnDeadlineAt: number | null; currentTurn: number } }>(
+      `/api/rooms/${create.data.roomId}/join`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ actorType: 'human', name: 'timer-guest', clientToken: guestToken }),
+      },
+    );
+    expect(join.status).toBe(201);
+    expect(join.data.state.currentTurn).toBe(1);
+    expect(join.data.state.turnDeadlineAt).not.toBeNull();
+    const startRemaining = (join.data.state.turnDeadlineAt as number) - Date.now();
+    expect(startRemaining).toBeGreaterThan(119_000);
+
+    await delay(2200);
+
+    const hostMove = await jsonRequest<{ currentTurn: number; turnDeadlineAt: number | null }>(
+      `/api/rooms/${create.data.roomId}/move`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${create.data.seatToken}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ x: 7, y: 7 }),
+      },
+    );
+    expect(hostMove.status).toBe(200);
+    expect(hostMove.data.currentTurn).toBe(2);
+    expect(hostMove.data.turnDeadlineAt).not.toBeNull();
+    const switchedRemaining = (hostMove.data.turnDeadlineAt as number) - Date.now();
+    expect(switchedRemaining).toBeGreaterThan(119_000);
+  }, 15_000);
 });

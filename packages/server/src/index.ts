@@ -477,9 +477,11 @@ export class LobbyDO {
       seatToken: randomId(),
     };
 
+    const startedAt = Date.now();
     openRoom.players.push(newSeat);
     openRoom.status = 'playing';
-    openRoom.lastActiveAt[2] = Date.now();
+    openRoom.lastActiveAt[1] = startedAt;
+    openRoom.lastActiveAt[2] = startedAt;
     this.seatTokenIndex.set(newSeat.seatToken, { roomId: openRoom.id, side: newSeat.side });
 
     const state = this.roomToState(openRoom);
@@ -1055,9 +1057,11 @@ export class LobbyDO {
         seatToken: randomId(),
       };
 
+      const startedAt = Date.now();
       room.players.push(newSeat);
       room.status = 'playing';
-      room.lastActiveAt[2] = Date.now();
+      room.lastActiveAt[1] = startedAt;
+      room.lastActiveAt[2] = startedAt;
       this.seatTokenIndex.set(newSeat.seatToken, { roomId: room.id, side: newSeat.side });
 
       const state = this.roomToState(room);
@@ -1238,6 +1242,7 @@ export class LobbyDO {
         this.scheduleFinishedRoomRecycle(room);
       } else {
         room.currentTurn = room.currentTurn === 1 ? 2 : 1;
+        room.lastActiveAt[room.currentTurn] = Date.now();
       }
 
       const state = this.roomToState(room);
