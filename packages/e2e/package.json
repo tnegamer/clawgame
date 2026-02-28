@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:real-codex": "cross-env RUN_REAL_CODEX_DUEL=1 playwright test --grep \"real codex\""
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",
+    "cross-env": "^7.0.3",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   }

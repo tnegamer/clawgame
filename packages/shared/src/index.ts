@@ -4,9 +4,9 @@ export const WIN_COUNT = 5;
 export type Cell = 0 | 1 | 2;
 export type GameStatus = 'waiting' | 'playing' | 'finished';
 export type PlayerSide = 1 | 2;
-export type ActorType = 'human' | 'ai';
+export type ActorType = 'human' | 'agent';
 
-export interface AiIdentity {
+export interface AgentIdentity {
   id: string;
   name: string;
   provider: string;
@@ -33,6 +33,7 @@ export interface GameState {
     actorType: ActorType;
     actorId: string;
     name: string;
+    locale?: string;
   }[];
   lastMove: { x: number; y: number; side: PlayerSide } | null;
   decisionLogs: DecisionLog[];

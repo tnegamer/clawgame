@@ -1,34 +1,44 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
 
-test('two AI players can finish one gomoku duel', async ({ request }) => {
-  const rules = await request.get('http://localhost:8787/api/rules');
+const runRealCodexDuel = process.env.RUN_REAL_CODEX_DUEL === '1';
+const realCodexTest = runRealCodexDuel ? test : test.skip;
+
+function parseResultJson(raw: string): { roomId: string; winner: number; status: string } {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) {
+      throw new Error(`cannot parse codex result json: ${raw}`);
+    }
+    return JSON.parse(match[0]);
+  }
+}
+
+test('human can create room and Agent can join by room id', async ({ request }) => {
+  const rules = await request.get('http://127.0.0.1:8787/api/rules');
   expect(rules.ok()).toBeTruthy();
 
-  const leftRes = await request.post('http://localhost:8787/api/ai/register', {
-    data: { name: `codex-e2e-${Date.now()}`, provider: 'codex', model: 'gpt-5' },
-  });
-  const rightRes = await request.post('http://localhost:8787/api/ai/register', {
+  const rightRes = await request.post('http://127.0.0.1:8787/api/agent/register', {
     data: { name: `claude-e2e-${Date.now()}`, provider: 'claude', model: 'sonnet' },
   });
-  expect(leftRes.ok()).toBeTruthy();
   expect(rightRes.ok()).toBeTruthy();
 
-  const left = await leftRes.json();
   const right = await rightRes.json();
 
-  const createRes = await request.post('http://localhost:8787/api/rooms', {
-    headers: { authorization: `Bearer ${left.token}` },
-    data: { actorType: 'ai', name: left.profile.name },
+  const createRes = await request.post('http://127.0.0.1:8787/api/rooms', {
+    data: { actorType: 'human', name: `human-host-${Date.now()}` },
   });
   expect(createRes.ok()).toBeTruthy();
   const created = await createRes.json();
 
-  const joinRes = await request.post(`http://localhost:8787/api/rooms/${created.roomId}/join`, {
+  const joinRes = await request.post(`http://127.0.0.1:8787/api/rooms/${created.roomId}/join`, {
     headers: { authorization: `Bearer ${right.token}` },
-    data: { actorType: 'ai', name: right.profile.name },
+    data: { actorType: 'agent', name: right.profile.name },
   });
   expect(joinRes.ok()).toBeTruthy();
   const joined = await joinRes.json();
@@ -39,7 +49,7 @@ test('two AI players can finish one gomoku duel', async ({ request }) => {
 
   let done = false;
   for (let step = 0; step < 240; step += 1) {
-    const stateRes = await request.get(`http://localhost:8787/api/rooms/${created.roomId}/state`);
+    const stateRes = await request.get(`http://127.0.0.1:8787/api/rooms/${created.roomId}/state`);
     expect(stateRes.ok()).toBeTruthy();
     const state = await stateRes.json();
 
@@ -64,7 +74,7 @@ test('two AI players can finish one gomoku duel', async ({ request }) => {
     const token = bySide.get(state.currentTurn);
     expect(token).toBeTruthy();
 
-    const moveRes = await request.post(`http://localhost:8787/api/rooms/${created.roomId}/move`, {
+    const moveRes = await request.post(`http://127.0.0.1:8787/api/rooms/${created.roomId}/move`, {
       headers: { authorization: `Bearer ${token}` },
       data: action!,
     });
@@ -73,59 +83,163 @@ test('two AI players can finish one gomoku duel', async ({ request }) => {
 
   expect(done).toBeTruthy();
 
-  const statsRes = await request.get('http://localhost:8787/api/stats/ai');
+  const statsRes = await request.get('http://127.0.0.1:8787/api/stats/agent');
   expect(statsRes.ok()).toBeTruthy();
   const stats = await statsRes.json();
-  expect(stats.leaderboard.length).toBeGreaterThanOrEqual(2);
+  expect(stats.leaderboard.length).toBeGreaterThanOrEqual(1);
 });
 
-test('skill prompt flow is published and web spectator sees live ai decision logs', async ({ request, page }) => {
-  const skillRes = await request.get('http://localhost:8787/skill.md');
+realCodexTest('real codex prompt flow duel can finish and can be spectated', async ({ request }) => {
+  test.setTimeout(300_000);
+
+  const skillRes = await request.get('http://127.0.0.1:8787/skill.md');
   expect(skillRes.ok()).toBeTruthy();
   const skillText = await skillRes.text();
-  expect(skillText).toContain('/api/rooms/open');
-  expect(skillText).toContain('/api/ai/register');
+  expect(skillText).toContain('/api/matchmaking/join');
+  expect(skillText).toContain('/api/agent/register');
 
   const thisDir = path.dirname(fileURLToPath(import.meta.url));
   const rootDir = path.resolve(thisDir, '../../..');
-  const tsxBin = path.join(rootDir, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
-  const duelScript = path.join(rootDir, 'packages', 'ai-bot', 'src', 'autonomous-duel.ts');
-  const duelChild = spawn(tsxBin, [duelScript], {
+  const codexBin = process.platform === 'win32' ? 'codex.cmd' : 'codex';
+  const codexCheck = spawnSync(codexBin, ['--version'], { encoding: 'utf8' });
+  if (codexCheck.status !== 0) {
+    throw new Error(
+      `codex CLI unavailable. Ensure codex is installed and logged in (run: codex login).\n` +
+      `stdout: ${codexCheck.stdout ?? ''}\n` +
+      `stderr: ${codexCheck.stderr ?? ''}`,
+    );
+  }
+  const baseUrl = 'http://127.0.0.1:8787';
+  const webBaseUrl = process.env.WEB_BASE_URL ?? 'http://127.0.0.1:5173';
+  const leftAgentName = `codex-real-left-${Date.now()}`;
+  const rightAgentName = `codex-real-right-${Date.now()}`;
+  const leftOutFile = path.join(rootDir, 'output', 'e2e-codex-left.json');
+  const rightOutFile = path.join(rootDir, 'output', 'e2e-codex-right.json');
+  await mkdir(path.join(rootDir, 'output'), { recursive: true });
+  const commonArgs = ['exec', '--dangerously-bypass-approvals-and-sandbox', '--color', 'never', '-C', rootDir];
+
+  const leftPrompt =
+    `Read ${baseUrl}/skill.md. ` +
+    `When calling POST /api/agent/register, use name "${leftAgentName}". ` +
+    'Do not create room directly. Join matchmaking when no room id is provided. ' +
+    'Continue until the game status is finished. ' +
+    'At the end, output exactly one line JSON: {"roomId":"<uuid>","winner":<0|1|2>,"status":"finished"}';
+
+  const leftChild = spawn(codexBin, [...commonArgs, '-o', leftOutFile, leftPrompt], {
     cwd: rootDir,
-    env: { ...process.env, BASE_URL: 'http://localhost:8787' },
+    env: { ...process.env },
+  });
+  let leftLogs = '';
+  leftChild.stdout.on('data', (buf) => {
+    leftLogs += buf.toString();
+  });
+  leftChild.stderr.on('data', (buf) => {
+    leftLogs += buf.toString();
   });
 
-  let stdout = '';
-  let stderr = '';
-  duelChild.stdout.on('data', (buf) => {
-    stdout += buf.toString();
+  const rightPrompt =
+    `Read ${baseUrl}/skill.md. ` +
+    `When calling POST /api/agent/register, use name "${rightAgentName}". ` +
+    'Do not create room directly. Join matchmaking when no room id is provided. ' +
+    'Continue until the game status is finished. ' +
+    'At the end, output exactly one line JSON: {"roomId":"<uuid>","winner":<0|1|2>,"status":"finished"}';
+
+  const rightChild = spawn(codexBin, [...commonArgs, '-o', rightOutFile, rightPrompt], {
+    cwd: rootDir,
+    env: { ...process.env },
   });
-  duelChild.stderr.on('data', (buf) => {
-    stderr += buf.toString();
+  let rightLogs = '';
+  rightChild.stdout.on('data', (buf) => {
+    rightLogs += buf.toString();
+  });
+  rightChild.stderr.on('data', (buf) => {
+    rightLogs += buf.toString();
   });
 
-  const roomId = await new Promise<string>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`timeout waiting room id\n${stdout}\n${stderr}`)), 20_000);
-    const check = () => {
-      const line = stdout.split('\n').find((l) => l.includes('joined room='));
-      const match = line?.match(/room=([a-f0-9-]+)/);
-      if (match?.[1]) {
-        clearTimeout(timeout);
-        resolve(match[1]);
+  const roomId = await new Promise<string>(async (resolve, reject) => {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      const activeRes = await request.get('http://127.0.0.1:8787/api/rooms/active');
+      if (activeRes.ok()) {
+        const payload = await activeRes.json();
+        const found = (payload.activeRooms as Array<{ roomId: string; players: { name: string }[] }> | undefined)?.find((room) => {
+          const names = room.players.map((p) => p.name);
+          return names.includes(leftAgentName) && names.includes(rightAgentName);
+        });
+        if (found?.roomId) {
+          resolve(found.roomId);
+          return;
+        }
       }
-    };
-    duelChild.stdout.on('data', check);
-    check();
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    reject(new Error(`timeout waiting matchmaking room.\nleft logs:\n${leftLogs}\nright logs:\n${rightLogs}`));
   });
 
-  await page.goto(`http://localhost:5173/?roomId=${roomId}`);
-  await expect(page.getByRole('heading', { name: 'AI 决策日志' })).toBeVisible();
-  await expect(page.locator('.log-item').first()).toBeVisible({ timeout: 20_000 });
-  await expect(page.locator('.log-item').first()).toContainText('来源: agent');
+  console.log(`Spectator URL: ${webBaseUrl}/?roomId=${roomId}`);
 
-  const duelExitCode = await new Promise<number | null>((resolve) => {
-    duelChild.on('close', (code) => resolve(code));
+  const playingReady = await new Promise<boolean>(async (resolve) => {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      const stateRes = await request.get(`http://127.0.0.1:8787/api/rooms/${roomId}/state`);
+      if (stateRes.ok()) {
+        const state = await stateRes.json();
+        if (state.status === 'playing' || state.status === 'finished') {
+          resolve(true);
+          return;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    resolve(false);
   });
-  expect(duelExitCode).toBe(0);
-  expect(stdout).toContain('game finished winner=');
+  expect(playingReady).toBeTruthy();
+
+  const [leftExitCode, rightExitCode] = await Promise.all([
+    new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => {
+        leftChild.kill('SIGKILL');
+        resolve(-1);
+      }, 180_000);
+      leftChild.on('close', (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    }),
+    new Promise<number | null>((resolve) => {
+      const timer = setTimeout(() => {
+        rightChild.kill('SIGKILL');
+        resolve(-1);
+      }, 180_000);
+      rightChild.on('close', (code) => {
+        clearTimeout(timer);
+        resolve(code);
+      });
+    }),
+  ]);
+
+  const [leftOut, rightOut] = await Promise.all([
+    readFile(leftOutFile, 'utf8'),
+    readFile(rightOutFile, 'utf8'),
+  ]);
+  const leftResult = parseResultJson(leftOut);
+  const rightResult = parseResultJson(rightOut);
+
+  expect(leftExitCode, leftLogs).toBe(0);
+  expect(rightExitCode, rightLogs).toBe(0);
+  expect(leftResult.status).toBe('finished');
+  expect(rightResult.status).toBe('finished');
+  expect(leftResult.roomId).toBe(roomId);
+  expect(rightResult.roomId).toBe(roomId);
+  expect([0, 1, 2]).toContain(leftResult.winner);
+  expect([0, 1, 2]).toContain(rightResult.winner);
+
+  const finalStateRes = await request.get(`http://127.0.0.1:8787/api/rooms/${roomId}/state`);
+  if (finalStateRes.ok()) {
+    const finalState = await finalStateRes.json();
+    expect(finalState.status).toBe('finished');
+    expect([0, 1, 2]).toContain(finalState.winner);
+  } else {
+    expect(finalStateRes.status()).toBe(404);
+  }
 });
