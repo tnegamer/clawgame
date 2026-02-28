@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "duel": "tsx src/duel.ts",
-    "bot": "tsx src/bot.ts"
+    "bot": "tsx src/bot.ts",
+    "duel:auto": "tsx src/autonomous-duel.ts"
   },
   "dependencies": {
     "@clawgame/shared": "0.1.0"

@@ -5,6 +5,22 @@ export type AiAuth = {
   name: string;
 };
 
+export type RoomSeat = {
+  roomId: string;
+  seatToken: string;
+  side: PlayerSide;
+  state: GameState;
+};
+
+type OpenRoom = {
+  roomId: string;
+  createdAt: number;
+  owner: {
+    actorType: 'human' | 'ai';
+    name: string;
+  };
+};
+
 export async function registerAi(baseUrl: string, name: string, provider = 'codex', model = 'gpt-5'): Promise<AiAuth> {
   const res = await fetch(`${baseUrl}/api/ai/register`, {
     method: 'POST',
@@ -18,7 +34,7 @@ export async function registerAi(baseUrl: string, name: string, provider = 'code
   return { token: data.token, name };
 }
 
-export async function createAiRoom(baseUrl: string, ai: AiAuth) {
+export async function createAiRoom(baseUrl: string, ai: AiAuth): Promise<RoomSeat> {
   const res = await fetch(`${baseUrl}/api/rooms`, {
     method: 'POST',
     headers: {
@@ -30,10 +46,10 @@ export async function createAiRoom(baseUrl: string, ai: AiAuth) {
   if (!res.ok) {
     throw new Error(await res.text());
   }
-  return res.json() as Promise<{ roomId: string; seatToken: string; state: GameState }>;
+  return res.json() as Promise<RoomSeat>;
 }
 
-export async function joinAiRoom(baseUrl: string, ai: AiAuth, roomId: string) {
+export async function joinAiRoom(baseUrl: string, ai: AiAuth, roomId: string): Promise<RoomSeat> {
   const res = await fetch(`${baseUrl}/api/rooms/${roomId}/join`, {
     method: 'POST',
     headers: {
@@ -45,7 +61,22 @@ export async function joinAiRoom(baseUrl: string, ai: AiAuth, roomId: string) {
   if (!res.ok) {
     throw new Error(await res.text());
   }
-  return res.json() as Promise<{ seatToken: string; state: GameState }>;
+  const joined = await res.json() as { seatToken: string; side: PlayerSide; state: GameState };
+  return {
+    roomId,
+    seatToken: joined.seatToken,
+    side: joined.side,
+    state: joined.state,
+  };
+}
+
+export async function listOpenRooms(baseUrl: string): Promise<OpenRoom[]> {
+  const res = await fetch(`${baseUrl}/api/rooms/open`);
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  const data = await res.json() as { openRooms: OpenRoom[] };
+  return data.openRooms;
 }
 
 export async function getState(baseUrl: string, roomId: string): Promise<GameState> {
@@ -69,6 +100,43 @@ export async function move(baseUrl: string, roomId: string, seatToken: string, x
     throw new Error(await res.text());
   }
   return res.json() as Promise<GameState>;
+}
+
+export async function findOrCreateSeat(params: {
+  baseUrl: string;
+  ai: AiAuth;
+  roomId?: string;
+  allowCreate: boolean;
+  joinWaitMs: number;
+  pollMs: number;
+}): Promise<RoomSeat> {
+  const { baseUrl, ai, roomId, allowCreate, joinWaitMs, pollMs } = params;
+  if (roomId) {
+    return joinAiRoom(baseUrl, ai, roomId);
+  }
+
+  const deadline = Date.now() + joinWaitMs;
+  while (Date.now() < deadline) {
+    const openRooms = await listOpenRooms(baseUrl);
+    if (openRooms.length > 0) {
+      try {
+        return await joinAiRoom(baseUrl, ai, openRooms[0].roomId);
+      } catch (error) {
+        // Another agent may have joined first. Keep polling.
+        if (error instanceof Error && error.message.includes('room full')) {
+          await new Promise((resolve) => setTimeout(resolve, pollMs));
+          continue;
+        }
+        throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+
+  if (!allowCreate) {
+    throw new Error('no open room found within join window');
+  }
+  return createAiRoom(baseUrl, ai);
 }
 
 function checkWinner(board: Cell[][], x: number, y: number, side: PlayerSide): boolean {

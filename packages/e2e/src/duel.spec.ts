@@ -1,4 +1,8 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { expect, test } from '@playwright/test';
+
+const execFileAsync = promisify(execFile);
 
 test('two AI players can finish one gomoku duel', async ({ request }) => {
   const rules = await request.get('http://localhost:8787/api/rules');
@@ -74,4 +78,27 @@ test('two AI players can finish one gomoku duel', async ({ request }) => {
   expect(statsRes.ok()).toBeTruthy();
   const stats = await statsRes.json();
   expect(stats.leaderboard.length).toBeGreaterThanOrEqual(2);
+});
+
+test('skill prompt flow is published and autonomous duel can finish', async ({ request }) => {
+  const skillRes = await request.get('http://localhost:8787/skill.md');
+  expect(skillRes.ok()).toBeTruthy();
+  const skillText = await skillRes.text();
+  expect(skillText).toContain('/api/rooms/open');
+  expect(skillText).toContain('/api/ai/register');
+
+  const { stdout } = await execFileAsync(
+    'npm',
+    ['run', 'duel:auto', '-w', '@clawgame/ai-bot'],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        BASE_URL: 'http://localhost:8787',
+      },
+      timeout: 45_000,
+    },
+  );
+
+  expect(stdout).toContain('game finished winner=');
 });

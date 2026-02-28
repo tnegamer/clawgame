@@ -18,4 +18,4 @@ for _ in $(seq 1 30); do
   sleep 0.3
 done
 
-npm run ai:duel
+npm run ai:duel:auto
