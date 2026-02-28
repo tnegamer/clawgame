@@ -6,6 +6,8 @@ import { expect, test } from '@playwright/test';
 
 const runRealCodexDuel = process.env.RUN_REAL_CODEX_DUEL === '1';
 const realCodexTest = runRealCodexDuel ? test : test.skip;
+const runRealAgentPrompt = process.env.RUN_REAL_AGENT_PROMPT === '1';
+const realAgentPromptTest = runRealAgentPrompt ? test : test.skip;
 
 function parseResultJson(raw: string): { roomId: string; winner: number; status: string } {
   try {
@@ -446,6 +448,100 @@ test('direct room link should show join modal component and join with entered na
   expect((state.players as Array<{ name: string }>).some((p) => p.name === visitorName)).toBeTruthy();
 });
 
+test('two real human players can enter game when B joins via room link', async ({ browser, request }) => {
+  try {
+    await request.get('http://127.0.0.1:5173');
+  } catch {
+    test.skip(true, 'web dev server is not reachable on 5173 in this environment');
+  }
+
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  const pageB = await ctxB.newPage();
+
+  try {
+    await pageA.goto('http://127.0.0.1:5173');
+    await pageA.getByRole('button', { name: /我是人类|I am Human/i }).click();
+
+    const hostName = `human-a-ui-${Date.now()}`;
+    await pageA.getByPlaceholder(/我的昵称|Your name/i).first().fill(hostName);
+    await pageA.getByRole('button', { name: /创建房间|Create Room/i }).click();
+
+    await pageA.waitForFunction(() => {
+      const roomId = new URLSearchParams(window.location.search).get('roomId');
+      return Boolean(roomId);
+    });
+    const roomId = await pageA.evaluate(() => new URLSearchParams(window.location.search).get('roomId'));
+    expect(roomId).toBeTruthy();
+
+    await pageB.goto(`http://127.0.0.1:5173/?roomId=${roomId}`);
+    await expect(pageB.locator('.modal-overlay')).toBeVisible();
+    const guestName = `human-b-ui-${Date.now()}`;
+    await pageB.getByPlaceholder(/我的昵称|Your name/i).fill(guestName);
+    await pageB.getByRole('button', { name: /加入房间|Join Room/i }).last().click();
+
+    await expect(pageB.locator('.modal-overlay')).toHaveCount(0);
+
+    const stateRes = await request.get(`http://127.0.0.1:8787/api/rooms/${roomId}/state`);
+    expect(stateRes.ok()).toBeTruthy();
+    const state = await stateRes.json();
+    expect(state.status).toBe('playing');
+    expect((state.players as Array<unknown>).length).toBe(2);
+  } finally {
+    await ctxA.close();
+    await ctxB.close();
+  }
+});
+
+test('two real human players can enter game when B joins via matchmaking button', async ({ browser, request }) => {
+  try {
+    await request.get('http://127.0.0.1:5173');
+  } catch {
+    test.skip(true, 'web dev server is not reachable on 5173 in this environment');
+  }
+
+  const ctxA = await browser.newContext();
+  const ctxB = await browser.newContext();
+  const pageA = await ctxA.newPage();
+  const pageB = await ctxB.newPage();
+
+  try {
+    await pageA.goto('http://127.0.0.1:5173');
+    await pageA.getByRole('button', { name: /我是人类|I am Human/i }).click();
+    await pageA.getByPlaceholder(/我的昵称|Your name/i).first().fill(`human-a-${Date.now()}`);
+    await pageA.getByRole('button', { name: /创建房间|Create Room/i }).click();
+
+    await pageA.waitForFunction(() => {
+      const roomId = new URLSearchParams(window.location.search).get('roomId');
+      return Boolean(roomId);
+    });
+    const roomId = await pageA.evaluate(() => new URLSearchParams(window.location.search).get('roomId'));
+    expect(roomId).toBeTruthy();
+
+    await pageB.goto('http://127.0.0.1:5173');
+    await pageB.getByRole('button', { name: /我是人类|I am Human/i }).click();
+    await pageB.getByPlaceholder(/我的昵称|Your name/i).first().fill(`human-b-${Date.now()}`);
+    await pageB.getByRole('button', { name: /加入匹配|Join Matchmaking/i }).click();
+
+    await pageB.waitForFunction(() => {
+      const roomId = new URLSearchParams(window.location.search).get('roomId');
+      return Boolean(roomId);
+    });
+    const joinedRoomId = await pageB.evaluate(() => new URLSearchParams(window.location.search).get('roomId'));
+    expect(joinedRoomId).toBe(roomId);
+
+    const stateRes = await request.get(`http://127.0.0.1:8787/api/rooms/${roomId}/state`);
+    expect(stateRes.ok()).toBeTruthy();
+    const state = await stateRes.json();
+    expect(state.status).toBe('playing');
+    expect((state.players as Array<unknown>).length).toBe(2);
+  } finally {
+    await ctxA.close();
+    await ctxB.close();
+  }
+});
+
 test('agent matchmaking should be idempotent for same agent token', async ({ request }) => {
   const registerRes = await request.post('http://127.0.0.1:8787/api/agent/register', {
     data: { name: `agent-idem-${Date.now()}`, provider: 'codex', model: 'gpt-5' },
@@ -634,4 +730,106 @@ realCodexTest('real codex prompt flow duel can finish and can be spectated', asy
   } else {
     expect(finalStateRes.status()).toBe(404);
   }
+});
+
+realAgentPromptTest('real agent can join a human-created room by room-id prompt', async ({ request }) => {
+  test.setTimeout(240_000);
+
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
+  const rootDir = path.resolve(thisDir, '../../..');
+  const codexBin = process.platform === 'win32' ? 'codex.cmd' : 'codex';
+  const codexCheck = spawnSync(codexBin, ['--version'], { encoding: 'utf8' });
+  if (codexCheck.status !== 0) {
+    throw new Error('codex CLI unavailable. Ensure codex is installed and logged in.');
+  }
+
+  const createRes = await request.post('http://127.0.0.1:8787/api/rooms', {
+    data: { actorType: 'human', name: `human-host-${Date.now()}` },
+  });
+  expect(createRes.ok()).toBeTruthy();
+  const created = await createRes.json();
+
+  const baseUrl = 'http://127.0.0.1:8787';
+  const outFile = path.join(rootDir, 'output', 'e2e-codex-room-join.json');
+  await mkdir(path.join(rootDir, 'output'), { recursive: true });
+  const commonArgs = ['exec', '--dangerously-bypass-approvals-and-sandbox', '--color', 'never', '-C', rootDir];
+  const agentName = `codex-room-${Date.now()}`;
+  const prompt =
+    `Read ${baseUrl}/skill.md. ` +
+    `When calling POST /api/agent/register, use name "${agentName}". ` +
+    `Join room id ${created.roomId}. Keep running until joined.`;
+  const child = spawn(codexBin, [...commonArgs, '-o', outFile, prompt], {
+    cwd: rootDir,
+    env: { ...process.env },
+  });
+
+  const joined = await new Promise<boolean>(async (resolve) => {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      const stateRes = await request.get(`http://127.0.0.1:8787/api/rooms/${created.roomId}/state`);
+      if (stateRes.ok()) {
+        const state = await stateRes.json();
+        if (state.status === 'playing' && (state.players as Array<{ name: string }>).some((p) => p.name === agentName)) {
+          resolve(true);
+          return;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    resolve(false);
+  });
+
+  child.kill('SIGKILL');
+  expect(joined).toBeTruthy();
+});
+
+realAgentPromptTest('real agent can join matchmaking by home prompt and enter game', async ({ request }) => {
+  test.setTimeout(240_000);
+
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
+  const rootDir = path.resolve(thisDir, '../../..');
+  const codexBin = process.platform === 'win32' ? 'codex.cmd' : 'codex';
+  const codexCheck = spawnSync(codexBin, ['--version'], { encoding: 'utf8' });
+  if (codexCheck.status !== 0) {
+    throw new Error('codex CLI unavailable. Ensure codex is installed and logged in.');
+  }
+
+  const createRes = await request.post('http://127.0.0.1:8787/api/rooms', {
+    data: { actorType: 'human', name: `human-host-mm-${Date.now()}` },
+  });
+  expect(createRes.ok()).toBeTruthy();
+  const created = await createRes.json();
+
+  const baseUrl = 'http://127.0.0.1:8787';
+  const outFile = path.join(rootDir, 'output', 'e2e-codex-mm-join.json');
+  await mkdir(path.join(rootDir, 'output'), { recursive: true });
+  const commonArgs = ['exec', '--dangerously-bypass-approvals-and-sandbox', '--color', 'never', '-C', rootDir];
+  const agentName = `codex-mm-${Date.now()}`;
+  const prompt =
+    `Read ${baseUrl}/skill.md. ` +
+    `When calling POST /api/agent/register, use name "${agentName}". ` +
+    'Join matchmaking and wait for game start.';
+  const child = spawn(codexBin, [...commonArgs, '-o', outFile, prompt], {
+    cwd: rootDir,
+    env: { ...process.env },
+  });
+
+  const joined = await new Promise<boolean>(async (resolve) => {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      const stateRes = await request.get(`http://127.0.0.1:8787/api/rooms/${created.roomId}/state`);
+      if (stateRes.ok()) {
+        const state = await stateRes.json();
+        if (state.status === 'playing' && (state.players as Array<{ name: string }>).some((p) => p.name === agentName)) {
+          resolve(true);
+          return;
+        }
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    resolve(false);
+  });
+
+  child.kill('SIGKILL');
+  expect(joined).toBeTruthy();
 });

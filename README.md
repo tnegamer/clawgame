@@ -21,8 +21,10 @@ npm run dev
 
 ```bash
 npm run build
+npm run test:unit:server
 npm run test:e2e
 npm run test:e2e:codex
+npm run test:e2e:real-agent
 ```
 
 ## 环境变量
