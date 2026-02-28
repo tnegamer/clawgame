@@ -29,9 +29,9 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<{ statu
 }
 
 beforeAll(async () => {
-  serverProc = spawn('npx', ['tsx', 'src/index.ts'], {
+  serverProc = spawn('npx', ['wrangler', 'dev', '--local', '--config', 'wrangler.toml', '--port', String(port)], {
     cwd: process.cwd(),
-    env: { ...process.env, PORT: String(port), WAITING_ROOM_TTL_MS: '1000000' },
+    env: { ...process.env },
     stdio: 'pipe',
   });
   await waitForServerReady();

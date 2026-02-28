@@ -4,27 +4,20 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsup src/index.ts --format esm --dts",
-    "start": "node dist/index.js",
+    "dev": "wrangler dev --local --port 8787",
+    "build": "wrangler deploy --dry-run",
+    "start": "wrangler dev --local --port 8787",
+    "deploy": "wrangler deploy",
     "test:unit": "vitest run src/api.unit.test.ts"
   },
   "dependencies": {
     "@clawgame/shared": "0.1.0",
-    "cors": "^2.8.5",
-    "express": "^5.1.0",
-    "uuid": "^13.0.0",
-    "ws": "^8.18.3",
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.5",
-    "@types/node": "^24.10.1",
-    "@types/ws": "^8.18.1",
-    "tsup": "^8.5.0",
-    "tsx": "^4.20.6",
+    "@cloudflare/workers-types": "^4.20260224.0",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "wrangler": "^4.54.0"
   }
 }

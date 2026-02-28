@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Check, Users, Shield, Bot, Play, ScrollText, Sun, Moon, Globe, X } from 'lucide-react';
+import { Copy, Check, Users, Shield, Bot, Play, ScrollText, Sun, Moon, Globe, X, Github } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 type Cell = 0 | 1 | 2;
@@ -991,6 +991,12 @@ export default function App() {
         </button>
       </div>
       {!roomId ? renderHome() : renderRoom()}
+      <footer className="footer">
+        <a href="https://github.com/QingWei-Li/clawgame" target="_blank" rel="noopener noreferrer" className="footer-link">
+          <Github size={20} />
+          <span>GitHub</span>
+        </a>
+      </footer>
     </>
   );
 }

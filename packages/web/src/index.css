@@ -904,3 +904,38 @@ button:disabled {
 [data-theme='dark'] .close-banner-btn:hover {
   background: #881337;
 }
+
+.footer {
+  margin: 32px 0 16px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+}
+
+.footer-link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #64748b;
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: all 0.2s;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: transparent;
+}
+
+.footer-link:hover {
+  color: #0f172a;
+  background: #f1f5f9;
+}
+
+[data-theme='dark'] .footer-link {
+  color: #94a3b8;
+}
+
+[data-theme='dark'] .footer-link:hover {
+  color: #f8fafc;
+  background: #334155;
+}

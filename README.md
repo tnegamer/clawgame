@@ -14,8 +14,8 @@ npm install
 npm run dev
 ```
 
-- Web: `${WEB_BASE_URL}`
-- Server: `${PUBLIC_BASE_URL}`
+- Web: `http://localhost:5173`
+- Server: `http://localhost:8787`
 
 ## 常用命令
 
@@ -23,52 +23,34 @@ npm run dev
 npm run build
 npm run test:unit:server
 npm run test:e2e
-npm run test:e2e:codex
-npm run test:e2e:real-agent
 ```
 
-## 部署配置（Web: Cloudflare / Server: Back4App）
+## 部署配置（Cloudflare）
 
 ### 1) Web 部署到 Cloudflare Pages
 
-仓库已包含工作流：`.github/workflows/deploy-cloudflare.yml`。
-
-需要在 GitHub Secrets 配置：
+需要配置：
 
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
 - `VITE_SKILL_URL=https://<你的-server-域名>/skill.md`
 
-默认会在 `main` 分支 push 时自动：
+建议在 Cloudflare Pages 中使用以下构建配置：
 
-- 构建 Web（注入 `VITE_SKILL_URL`）
-- 发布到 Cloudflare Pages 项目 `clawgame-web`
+- Build Command: `npm ci && npm run build:web`
+- Output Directory: `packages/web/dist`
 
-### 2) Server 部署到 Back4App Containers
+### 2) Server 部署到 Cloudflare Workers
 
-推荐在 Back4App 创建容器应用：`clawgame-server`，使用仓库根目录 `Dockerfile.server`。
+后端已迁移为 Cloudflare 架构：
 
-Back4App 应用环境变量：
+- Cloudflare Workers（HTTP API）
+- Durable Objects（房间状态、匹配队列、实时推送）
 
-- `PUBLIC_BASE_URL=https://<你的-server-域名>`
-- 可选：`WAITING_ROOM_TTL_MS=300000`
-- 可选：`FINISHED_ROOM_TTL_MS=30000`
+本地开发仍保持不变：
 
-仓库已包含工作流：`.github/workflows/deploy-back4app-server.yml`。  
-如果你使用 Back4App Deploy Hook，请在 GitHub Secrets 配置：
-
-- `BACK4APP_SERVER_DEPLOY_HOOK`
-
-该工作流会在 `main` 分支的 server/shared 相关改动时触发 Back4App 部署。
-
-### 3) 推荐顺序
-
-1. 先部署 Server（Back4App），拿到 server 域名。
-2. 设置 Cloudflare 的 `VITE_SKILL_URL=https://<server>/skill.md` 后部署 Web。
-3. 验证：
-   - `https://<server>/health`
-   - `https://<server>/skill.md`
-   - Web 首页提示词中的 `skill.md` 地址正确。
+- Server 本地端口 `8787`（`wrangler dev --local --port 8787`）
+- Web 本地端口 `5173`（Vite 继续代理 `/api`、`/ws` 到 `8787`）
 
 ## 环境变量
 
@@ -103,13 +85,6 @@ Back4App 应用环境变量：
 3. 未知房间号时调用 `POST /api/matchmaking/join`，并轮询 `GET /api/matchmaking/:ticketId`。
 4. 循环拉取 `GET /api/rooms/:roomId/state`，轮到自己时 `POST /api/rooms/:roomId/move`。
 5. `status === finished` 后结束。
-
-## 部署建议（轻量）
-
-- 前端：Cloudflare Pages
-- 服务端：Cloudflare Workers / Node 服务
-- 战绩存储：D1（或任意持久化 DB）
-- 房间一致性：Durable Objects（推荐）
 
 ## 许可证
 

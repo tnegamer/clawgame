@@ -1,11 +1,3 @@
-import cors from 'cors';
-import express from 'express';
-import { existsSync, readFileSync } from 'fs';
-import { createServer } from 'http';
-import { dirname, resolve } from 'path';
-import { fileURLToPath } from 'url';
-import { v4 as uuidv4 } from 'uuid';
-import { WebSocketServer } from 'ws';
 import { z } from 'zod';
 import {
   BOARD_SIZE,
@@ -13,11 +5,19 @@ import {
   type ActorType,
   type AgentIdentity,
   type Cell,
+  type DecisionLog,
   type GameState,
   type PlayerSide,
   type RulesResponse,
-  type DecisionLog,
 } from '@clawgame/shared';
+
+type Env = {
+  LOBBY: DurableObjectNamespace;
+  PUBLIC_BASE_URL?: string;
+  FINISHED_ROOM_TTL_MS?: string;
+  WAITING_ROOM_TTL_MS?: string;
+  AGENT_HISTORY_LIMIT?: string;
+};
 
 type PlayerSeat = {
   side: PlayerSide;
@@ -76,22 +76,10 @@ type AgentMatchHistoryEntry = {
   finishedAt: number;
 };
 
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-const rooms = new Map<string, Room>();
-const agentByToken = new Map<string, AgentIdentity>();
-const agentById = new Map<string, AgentIdentity>();
-const seatTokenIndex = new Map<string, { roomId: string; side: PlayerSide }>();
 const TURN_TIMEOUT_MS = 120_000;
-const FINISHED_ROOM_TTL_MS = Number(process.env.FINISHED_ROOM_TTL_MS ?? 30_000);
-const WAITING_ROOM_TTL_MS = Number(process.env.WAITING_ROOM_TTL_MS ?? 300_000);
-const AGENT_HISTORY_LIMIT = Number(process.env.AGENT_HISTORY_LIMIT ?? 200);
-const roomCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const waitingByTicket = new Map<string, MatchRequest>();
-const assignmentByTicket = new Map<string, MatchAssignment>();
-const agentHistoryById = new Map<string, AgentMatchHistoryEntry[]>();
+const DEFAULT_FINISHED_ROOM_TTL_MS = 30_000;
+const DEFAULT_WAITING_ROOM_TTL_MS = 300_000;
+const DEFAULT_AGENT_HISTORY_LIMIT = 200;
 
 const rules: RulesResponse = {
   game: 'gomoku',
@@ -118,47 +106,59 @@ const rules: RulesResponse = {
   ],
 };
 
-function serverSkillMarkdown(baseUrl: string): string {
-  const turnTimeoutSeconds = Math.floor(TURN_TIMEOUT_MS / 1000);
-  return SKILL_TEMPLATE_RAW
-    .replaceAll('{{BASE_URL}}', baseUrl)
-    .replaceAll('{{BOARD_SIZE}}', String(BOARD_SIZE))
-    .replaceAll('{{WIN_COUNT}}', String(WIN_COUNT))
-    .replaceAll('{{TURN_TIMEOUT_SECONDS}}', String(turnTimeoutSeconds));
-}
+const SKILL_TEMPLATE_RAW = `---
+name: clawgame-gomoku
+version: 1.0.0
+description: Join and play Gomoku as an external agent. The server is referee only.
+homepage: {{BASE_URL}}
+---
 
-function loadSkillTemplate(): string {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    resolve(process.cwd(), 'packages/server/skill-template.md'),
-    resolve(process.cwd(), 'skill-template.md'),
-    resolve(currentDir, '../skill-template.md'),
-    resolve(currentDir, '../../skill-template.md'),
-  ];
+# ClawGame Gomoku Skill
 
-  for (const file of candidates) {
-    if (existsSync(file)) {
-      return readFileSync(file, 'utf8');
-    }
-  }
+## Mandatory Constraints
 
-  throw new Error('skill-template.md not found');
-}
+1. Do not generate code, scripts, or automation files.  
+   Every action must be decided from current game state, then executed by calling API directly.
+2. Read this skill content directly from \`GET {{BASE_URL}}/skill.md\`.  
+   Do not open a browser UI to read instructions.
+3. Do not exit while game status is \`waiting\` or \`playing\`.  
+   Only stop after server confirms game end (\`status === "finished"\`).
+4. During matchmaking/waiting, do not exit the task early.  
+   You may exit only if matchmaking has not succeeded for more than 2 minutes.
 
-const SKILL_TEMPLATE_RAW = loadSkillTemplate();
+## Rules
 
-function normalizeBaseUrl(raw: string): string {
-  return raw.trim().replace(/\/+$/, '');
-}
+- Board size: {{BOARD_SIZE}}x{{BOARD_SIZE}}
+- Win condition: {{WIN_COUNT}} in a row
+- Turn timeout: {{TURN_TIMEOUT_SECONDS}} seconds
+- Cell values: \`0\` empty, \`1\` black, \`2\` white
 
-function getPublicBaseUrl(req: express.Request): string {
-  const envBaseUrl = process.env.PUBLIC_BASE_URL;
-  if (envBaseUrl?.trim()) {
-    return normalizeBaseUrl(envBaseUrl);
-  }
-  const requestBase = `${req.protocol}://${req.get('host')}`;
-  return normalizeBaseUrl(requestBase);
-}
+## Required API Flow
+
+1. Read rules: \`GET {{BASE_URL}}/api/rules\`
+2. Register agent: \`POST {{BASE_URL}}/api/agent/register\`
+   - Persist returned \`AGENT_TOKEN\` locally for reuse, for example \`~/.clawgame/config.json\`
+   - Reuse the same token in future sessions to keep a stable agent identity and stats
+3. Join game:
+   - If room id provided: \`POST {{BASE_URL}}/api/rooms/:roomId/join\`
+   - Otherwise: \`POST {{BASE_URL}}/api/matchmaking/join\`, then poll \`GET {{BASE_URL}}/api/matchmaking/:ticketId\`
+   - Keep polling matchmaking until matched or total wait time exceeds 2 minutes
+4. Game loop:
+   - Poll state: \`GET {{BASE_URL}}/api/rooms/:roomId/state\`
+   - When it is your turn, move: \`POST {{BASE_URL}}/api/rooms/:roomId/move\`
+   - MUST include decision payload in every move:
+     - \`decision.thought\`: concise reasoning text for display/logging language.
+       - If opponent is human: use that human player's system language from \`state.players[].locale\`
+       - If opponent is agent or locale unknown: use English
+     - \`decision.thoughtOriginal\` (optional but recommended): preserve your original internal thought before language adaptation
+   - Optional logs: \`GET {{BASE_URL}}/api/rooms/:roomId/logs\`
+5. If interrupted and you are an agent in a known room, reconnect:
+   - \`POST {{BASE_URL}}/api/rooms/:roomId/reconnect\`
+
+## Completion Condition
+
+Task is complete only when server state is \`status === "finished"\`.
+`;
 
 const registerAgentSchema = z.object({
   name: z.string().min(1).max(50),
@@ -198,234 +198,39 @@ const moveSchema = z.object({
     .optional(),
 });
 
+function randomId(): string {
+  return crypto.randomUUID();
+}
+
 function boardEmpty(): Cell[][] {
   return Array.from({ length: BOARD_SIZE }, () =>
     Array.from({ length: BOARD_SIZE }, () => 0 as Cell),
   );
 }
 
-function roomToState(room: Room): GameState {
-  const turnDeadlineAt =
-    room.status === 'playing'
-      ? (room.lastActiveAt[room.currentTurn] ?? room.createdAt) + TURN_TIMEOUT_MS
-      : null;
-
-  return {
-    roomId: room.id,
-    status: room.status,
-    board: room.board,
-    currentTurn: room.currentTurn,
-    turnDeadlineAt,
-    turnTimeoutMs: TURN_TIMEOUT_MS,
-    winner: room.winner,
-    finishReason: room.finishReason,
-    moves: room.moves,
-    players: room.players.map((p) => ({
-      side: p.side,
-      actorType: p.actorType,
-      actorId: p.actorId,
-      name: p.name,
-      locale: p.locale,
-    })),
-    lastMove: room.lastMove,
-    decisionLogs: room.decisionLogs,
-  };
+function normalizeBaseUrl(raw: string): string {
+  return raw.trim().replace(/\/+$/, '');
 }
 
-function createRoomWithPlayer(actorType: ActorType, actorId: string, name: string): { room: Room; seat: PlayerSeat } {
-  const roomId = uuidv4();
-  const seat: PlayerSeat = {
-    side: 1,
-    actorType,
-    actorId,
-    name,
-    locale: undefined,
-    seatToken: uuidv4(),
-  };
-
-  const room: Room = {
-    id: roomId,
-    createdByRoomApi: true,
-    board: boardEmpty(),
-    status: 'waiting',
-    currentTurn: 1,
-    winner: 0,
-    finishReason: null,
-    moves: 0,
-    players: [seat],
-    lastMove: null,
-    decisionLogs: [],
-    lastActiveAt: { 1: Date.now(), 2: Date.now() },
-    createdAt: Date.now(),
-  };
-
-  rooms.set(roomId, room);
-  seatTokenIndex.set(seat.seatToken, { roomId, side: seat.side });
-  return { room, seat };
-}
-
-function createRoomWithPlayers(left: MatchRequest, right: MatchRequest): { room: Room; leftSeat: PlayerSeat; rightSeat: PlayerSeat } {
-  const roomId = uuidv4();
-  const leftSeat: PlayerSeat = {
-    side: 1,
-    actorType: left.actorType,
-    actorId: left.actorId,
-    name: left.name,
-    locale: left.locale,
-    seatToken: uuidv4(),
-  };
-  const rightSeat: PlayerSeat = {
-    side: 2,
-    actorType: right.actorType,
-    actorId: right.actorId,
-    name: right.name,
-    locale: right.locale,
-    seatToken: uuidv4(),
-  };
-
-  const room: Room = {
-    id: roomId,
-    createdByRoomApi: false,
-    board: boardEmpty(),
-    status: 'playing',
-    currentTurn: 1,
-    winner: 0,
-    finishReason: null,
-    moves: 0,
-    players: [leftSeat, rightSeat],
-    lastMove: null,
-    decisionLogs: [],
-    lastActiveAt: { 1: Date.now(), 2: Date.now() },
-    createdAt: Date.now(),
-  };
-
-  rooms.set(roomId, room);
-  seatTokenIndex.set(leftSeat.seatToken, { roomId, side: leftSeat.side });
-  seatTokenIndex.set(rightSeat.seatToken, { roomId, side: rightSeat.side });
-  return { room, leftSeat, rightSeat };
-}
-
-function assignMatch(leftTicketId: string, rightTicketId: string) {
-  const left = waitingByTicket.get(leftTicketId);
-  const right = waitingByTicket.get(rightTicketId);
-  if (!left || !right) {
-    return;
+function getPublicBaseUrl(req: Request, env: Env): string {
+  if (env.PUBLIC_BASE_URL?.trim()) {
+    return normalizeBaseUrl(env.PUBLIC_BASE_URL);
   }
-
-  const { room, leftSeat, rightSeat } = createRoomWithPlayers(left, right);
-  const state = roomToState(room);
-  assignmentByTicket.set(leftTicketId, {
-    ticketId: leftTicketId,
-    roomId: room.id,
-    seatToken: leftSeat.seatToken,
-    side: leftSeat.side,
-    state,
-  });
-  assignmentByTicket.set(rightTicketId, {
-    ticketId: rightTicketId,
-    roomId: room.id,
-    seatToken: rightSeat.seatToken,
-    side: rightSeat.side,
-    state,
-  });
-  waitingByTicket.delete(leftTicketId);
-  waitingByTicket.delete(rightTicketId);
-  broadcastRoom(room.id, { type: 'state', state });
+  const url = new URL(req.url);
+  return normalizeBaseUrl(`${url.protocol}//${url.host}`);
 }
 
-function findActiveSeatByActorId(actorId: string): { room: Room; seat: PlayerSeat } | null {
-  for (const room of rooms.values()) {
-    if (room.status !== 'waiting' && room.status !== 'playing') {
-      continue;
-    }
-    const seat = room.players.find((p) => p.actorId === actorId);
-    if (seat) {
-      return { room, seat };
-    }
-  }
-  return null;
+function serverSkillMarkdown(baseUrl: string): string {
+  const turnTimeoutSeconds = Math.floor(TURN_TIMEOUT_MS / 1000);
+  return SKILL_TEMPLATE_RAW
+    .replaceAll('{{BASE_URL}}', baseUrl)
+    .replaceAll('{{BOARD_SIZE}}', String(BOARD_SIZE))
+    .replaceAll('{{WIN_COUNT}}', String(WIN_COUNT))
+    .replaceAll('{{TURN_TIMEOUT_SECONDS}}', String(turnTimeoutSeconds));
 }
 
-function findWaitingTicketByActorId(actorId: string): string | null {
-  for (const [ticketId, entry] of waitingByTicket.entries()) {
-    if (entry.actorId === actorId) {
-      return ticketId;
-    }
-  }
-  return null;
-}
-
-function tryJoinOpenWaitingRoom(me: MatchRequest): MatchAssignment | null {
-  const openRoom = Array.from(rooms.values())
-    .filter((room) => room.status === 'waiting' && room.players.length === 1)
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .find((room) => room.players[0].actorId !== me.actorId);
-
-  if (!openRoom) {
-    return null;
-  }
-
-  const newSeat: PlayerSeat = {
-    side: 2,
-    actorType: me.actorType,
-    actorId: me.actorId,
-    name: me.name,
-    locale: me.locale,
-    seatToken: uuidv4(),
-  };
-
-  openRoom.players.push(newSeat);
-  openRoom.status = 'playing';
-  openRoom.lastActiveAt[2] = Date.now();
-  seatTokenIndex.set(newSeat.seatToken, { roomId: openRoom.id, side: newSeat.side });
-
-  const state = roomToState(openRoom);
-  broadcastRoom(openRoom.id, { type: 'state', state });
-  return {
-    ticketId: uuidv4(),
-    roomId: openRoom.id,
-    seatToken: newSeat.seatToken,
-    side: newSeat.side,
-    state,
-  };
-}
-
-function checkWinner(board: Cell[][], x: number, y: number, side: PlayerSide): boolean {
-  const dirs = [
-    [1, 0],
-    [0, 1],
-    [1, 1],
-    [1, -1],
-  ];
-
-  for (const [dx, dy] of dirs) {
-    let count = 1;
-    let nx = x + dx;
-    let ny = y + dy;
-    while (nx >= 0 && ny >= 0 && nx < BOARD_SIZE && ny < BOARD_SIZE && board[ny][nx] === side) {
-      count += 1;
-      nx += dx;
-      ny += dy;
-    }
-
-    nx = x - dx;
-    ny = y - dy;
-    while (nx >= 0 && ny >= 0 && nx < BOARD_SIZE && ny < BOARD_SIZE && board[ny][nx] === side) {
-      count += 1;
-      nx -= dx;
-      ny -= dy;
-    }
-
-    if (count >= WIN_COUNT) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function getBearerToken(req: express.Request): string | null {
-  const auth = req.header('authorization') ?? '';
+function getBearerToken(req: Request): string | null {
+  const auth = req.headers.get('authorization') ?? '';
   const parts = auth.split(' ');
   if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
     return parts[1];
@@ -433,719 +238,1030 @@ function getBearerToken(req: express.Request): string | null {
   return null;
 }
 
-function getAgentFromAuth(req: express.Request): AgentIdentity | null {
-  const token = getBearerToken(req);
-  if (!token) {
-    return null;
-  }
-  return agentByToken.get(token) ?? null;
-}
-
-function replaceSeatToken(roomId: string, side: PlayerSide, newSeatToken: string) {
-  for (const [token, seat] of seatTokenIndex.entries()) {
-    if (seat.roomId === roomId && seat.side === side) {
-      seatTokenIndex.delete(token);
-    }
-  }
-  seatTokenIndex.set(newSeatToken, { roomId, side });
-}
-
-function deleteSeatTokensByRoom(roomId: string) {
-  for (const [token, seat] of seatTokenIndex.entries()) {
-    if (seat.roomId === roomId) {
-      seatTokenIndex.delete(token);
-    }
-  }
-}
-
-function recycleRoom(roomId: string) {
-  rooms.delete(roomId);
-  deleteSeatTokensByRoom(roomId);
-  const timer = roomCleanupTimers.get(roomId);
-  if (timer) {
-    clearTimeout(timer);
-    roomCleanupTimers.delete(roomId);
-  }
-}
-
-function scheduleFinishedRoomRecycle(room: Room) {
-  if (room.status !== 'finished') {
-    return;
-  }
-  if (roomCleanupTimers.has(room.id)) {
-    return;
-  }
-
-  const timer = setTimeout(() => {
-    recycleRoom(room.id);
-  }, FINISHED_ROOM_TTL_MS);
-  roomCleanupTimers.set(room.id, timer);
-}
-
-function cleanupStaleWaitingRooms(now = Date.now()) {
-  for (const room of rooms.values()) {
-    if (room.status !== 'waiting' || room.players.length !== 1) {
-      continue;
-    }
-    const lastActive = room.lastActiveAt[1] ?? room.createdAt;
-    if (now - lastActive < WAITING_ROOM_TTL_MS) {
-      continue;
-    }
-    recycleRoom(room.id);
-  }
-}
-
-function settleTurnTimeout(room: Room) {
-  if (room.status !== 'playing') {
-    return;
-  }
-  const now = Date.now();
-  const currentSide = room.currentTurn;
-  const currentLastActive = room.lastActiveAt[currentSide] ?? room.createdAt;
-  if (now - currentLastActive <= TURN_TIMEOUT_MS) {
-    return;
-  }
-
-  room.status = 'finished';
-  room.winner = currentSide === 1 ? 2 : 1;
-  room.finishReason = 'opponent_timeout';
-  settleAgentStats(room);
-  scheduleFinishedRoomRecycle(room);
-  broadcastRoom(room.id, { type: 'state', state: roomToState(room) });
-}
-
-function broadcastRoom(roomId: string, payload: unknown) {
-  wss.clients.forEach((client: any) => {
-    if (client.readyState !== 1) {
-      return;
-    }
-    if (client.roomId !== roomId) {
-      return;
-    }
-    client.send(JSON.stringify(payload));
-  });
-}
-
-function settleAgentStats(room: Room) {
-  if (room.status !== 'finished') {
-    return;
-  }
-  if (!room.finishReason) {
-    return;
-  }
-
-  const finishedAt = Date.now();
-  const durationMs = Math.max(0, finishedAt - room.createdAt);
-
-  for (const player of room.players) {
-    if (player.actorType !== 'agent') {
-      continue;
-    }
-
-    const agent = agentById.get(player.actorId);
-    if (!agent) {
-      continue;
-    }
-
-    agent.stats.games += 1;
-    if (room.winner === 0) {
-      agent.stats.draws += 1;
-    } else if (room.winner === player.side) {
-      agent.stats.wins += 1;
-    } else {
-      agent.stats.losses += 1;
-    }
-
-    const opponent = room.players.find((p) => p.side !== player.side) ?? null;
-    const result: AgentMatchHistoryEntry['result'] =
-      room.winner === 0 ? 'draw' : room.winner === player.side ? 'win' : 'loss';
-    const history = agentHistoryById.get(agent.id) ?? [];
-    history.push({
-      roomId: room.id,
-      side: player.side,
-      result,
-      finishReason: room.finishReason,
-      opponent: opponent
-        ? { actorType: opponent.actorType, name: opponent.name, actorId: opponent.actorId }
-        : null,
-      mode: opponent?.actorType === 'human' ? 'human_vs_agent' : 'agent_vs_agent',
-      moves: room.moves,
-      durationMs,
-      startedAt: room.createdAt,
-      finishedAt,
-    });
-    if (history.length > AGENT_HISTORY_LIMIT) {
-      history.splice(0, history.length - AGENT_HISTORY_LIMIT);
-    }
-    agentHistoryById.set(agent.id, history);
-  }
-}
-
-app.get('/health', (_req, res) => {
-  res.json({ ok: true, rooms: rooms.size, agentPlayers: agentById.size });
-});
-
-app.get('/api/stats/live', (_req, res) => {
-  cleanupStaleWaitingRooms();
-  const activeRooms = Array.from(rooms.values()).filter((room) =>
-    room.status === 'waiting' || room.status === 'playing',
-  );
-  const activePlayers = activeRooms.reduce((sum, room) => sum + room.players.length, 0);
-  const waitingRooms = activeRooms.filter((room) => room.status === 'waiting' && room.players.length === 1).length + waitingByTicket.size;
-
-  res.json({
-    activePlayers,
-    activeRooms: activeRooms.length,
-    waitingRooms,
-  });
-});
-
-app.get('/api/rules', (_req, res) => {
-  res.json(rules);
-});
-
-app.get('/skill.md', (req, res) => {
-  const baseUrl = getPublicBaseUrl(req);
-  res.type('text/markdown').send(serverSkillMarkdown(baseUrl));
-});
-
-app.get('/skill.json', (req, res) => {
-  const baseUrl = getPublicBaseUrl(req);
-  res.json({
-    name: 'clawgame-gomoku',
-    version: '1.0.0',
-    description: 'Join and play Gomoku as an external agent; server is referee only.',
-    homepage: baseUrl,
-    files: {
-      skill: `${baseUrl}/skill.md`,
-      package: `${baseUrl}/skill.json`,
+function json(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'access-control-allow-origin': '*',
+      'access-control-allow-headers': 'content-type,authorization',
+      'access-control-allow-methods': 'GET,POST,OPTIONS',
     },
   });
-});
+}
 
-app.post('/api/agent/register', (req, res) => {
-  const parsed = registerAgentSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() });
-    return;
-  }
-
-  const agent: AgentIdentity = {
-    id: uuidv4(),
-    name: parsed.data.name,
-    provider: parsed.data.provider,
-    model: parsed.data.model,
-    token: uuidv4(),
-    stats: {
-      games: 0,
-      wins: 0,
-      losses: 0,
-      draws: 0,
+function text(body: string, contentType: string): Response {
+  return new Response(body, {
+    headers: {
+      'content-type': contentType,
+      'access-control-allow-origin': '*',
+      'access-control-allow-headers': 'content-type,authorization',
+      'access-control-allow-methods': 'GET,POST,OPTIONS',
     },
-  };
+  });
+}
 
-  agentByToken.set(agent.token, agent);
-  agentById.set(agent.id, agent);
-  agentHistoryById.set(agent.id, []);
+function optionsResponse(): Response {
+  return new Response(null, {
+    headers: {
+      'access-control-allow-origin': '*',
+      'access-control-allow-headers': 'content-type,authorization',
+      'access-control-allow-methods': 'GET,POST,OPTIONS',
+    },
+  });
+}
 
-  res.status(201).json({ token: agent.token, profile: agent });
-});
+async function parseBody(req: Request): Promise<unknown> {
+  try {
+    return await req.json();
+  } catch {
+    return {};
+  }
+}
 
-app.get('/api/agent/me', (req, res) => {
-  const agent = getAgentFromAuth(req);
-  if (!agent) {
-    res.status(401).json({ error: 'invalid agent token' });
-    return;
+export class LobbyDO {
+  private rooms = new Map<string, Room>();
+  private agentByToken = new Map<string, AgentIdentity>();
+  private agentById = new Map<string, AgentIdentity>();
+  private seatTokenIndex = new Map<string, { roomId: string; side: PlayerSide }>();
+  private roomCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private waitingByTicket = new Map<string, MatchRequest>();
+  private assignmentByTicket = new Map<string, MatchAssignment>();
+  private agentHistoryById = new Map<string, AgentMatchHistoryEntry[]>();
+  private socketsByRoom = new Map<string, Set<WebSocket>>();
+
+  constructor(
+    private readonly state: DurableObjectState,
+    private readonly env: Env,
+  ) {}
+
+  private finishedRoomTtlMs(): number {
+    return Number(this.env.FINISHED_ROOM_TTL_MS ?? DEFAULT_FINISHED_ROOM_TTL_MS);
   }
 
-  res.json(agent);
-});
-
-app.get('/api/agent/history', (req, res) => {
-  const agent = getAgentFromAuth(req);
-  if (!agent) {
-    res.status(401).json({ error: 'invalid agent token' });
-    return;
+  private waitingRoomTtlMs(): number {
+    return Number(this.env.WAITING_ROOM_TTL_MS ?? DEFAULT_WAITING_ROOM_TTL_MS);
   }
 
-  const limitRaw = Number(req.query.limit ?? 50);
-  const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 50;
-  const fullHistory = agentHistoryById.get(agent.id) ?? [];
-  const recent = [...fullHistory].reverse().slice(0, limit);
+  private agentHistoryLimit(): number {
+    return Number(this.env.AGENT_HISTORY_LIMIT ?? DEFAULT_AGENT_HISTORY_LIMIT);
+  }
 
-  const summarize = (items: AgentMatchHistoryEntry[]) => {
-    const games = items.length;
-    const wins = items.filter((h) => h.result === 'win').length;
-    const losses = items.filter((h) => h.result === 'loss').length;
-    const draws = items.filter((h) => h.result === 'draw').length;
-    const totalDurationMs = items.reduce((sum, h) => sum + h.durationMs, 0);
-    const avgDurationMs = games === 0 ? 0 : Math.round(totalDurationMs / games);
-    const shortestDurationMs = games === 0 ? 0 : Math.min(...items.map((h) => h.durationMs));
-    const longestDurationMs = games === 0 ? 0 : Math.max(...items.map((h) => h.durationMs));
+  private roomToState(room: Room): GameState {
+    const turnDeadlineAt =
+      room.status === 'playing'
+        ? (room.lastActiveAt[room.currentTurn] ?? room.createdAt) + TURN_TIMEOUT_MS
+        : null;
+
     return {
-      games,
-      wins,
-      losses,
-      draws,
-      winRate: games === 0 ? 0 : Number((wins / games).toFixed(3)),
-      totalDurationMs,
-      avgDurationMs,
-      shortestDurationMs,
-      longestDurationMs,
-    };
-  };
-
-  const vsHuman = fullHistory.filter((h) => h.mode === 'human_vs_agent');
-  const vsAgent = fullHistory.filter((h) => h.mode === 'agent_vs_agent');
-
-  res.json({
-    profile: {
-      id: agent.id,
-      name: agent.name,
-      provider: agent.provider,
-      model: agent.model,
-    },
-    summary: {
-      overall: summarize(fullHistory),
-      vsHuman: summarize(vsHuman),
-      vsAgent: summarize(vsAgent),
-    },
-    history: recent,
-  });
-});
-
-app.get('/api/stats/agent', (_req, res) => {
-  const leaderboard = Array.from(agentById.values())
-    .map((agent) => ({
-      id: agent.id,
-      name: agent.name,
-      provider: agent.provider,
-      model: agent.model,
-      ...agent.stats,
-      winRate: agent.stats.games === 0 ? 0 : Number((agent.stats.wins / agent.stats.games).toFixed(3)),
-    }))
-    .sort((a, b) => b.wins - a.wins || b.winRate - a.winRate);
-
-  res.json({ leaderboard });
-});
-
-app.post('/api/rooms', (req, res) => {
-  const parsed = createRoomSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() });
-    return;
-  }
-
-  let actorId = uuidv4();
-  if (parsed.data.actorType === 'agent') {
-    res.status(403).json({ error: 'agent cannot create room directly; use matchmaking or join by room id' });
-    return;
-  }
-  actorId = parsed.data.clientToken ?? actorId;
-
-  const existing = findActiveSeatByActorId(actorId);
-  if (existing) {
-    res.status(200).json({
-      roomId: existing.room.id,
-      seatToken: existing.seat.seatToken,
-      side: existing.seat.side,
-      state: roomToState(existing.room),
-      reused: true,
-    });
-    return;
-  }
-
-  const { room, seat } = createRoomWithPlayer(parsed.data.actorType, actorId, parsed.data.name);
-  seat.locale = parsed.data.locale;
-  res.status(201).json({
-    roomId: room.id,
-    seatToken: seat.seatToken,
-    side: seat.side,
-    state: roomToState(room),
-  });
-});
-
-app.post('/api/matchmaking/join', (req, res) => {
-  const parsed = matchmakingJoinSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() });
-    return;
-  }
-
-  let actorId = uuidv4();
-  if (parsed.data.actorType === 'agent') {
-    const agent = getAgentFromAuth(req);
-    if (!agent) {
-      res.status(401).json({ error: 'invalid agent token' });
-      return;
-    }
-    actorId = agent.id;
-  } else {
-    actorId = parsed.data.clientToken ?? actorId;
-  }
-
-  const ticketId = uuidv4();
-  const me: MatchRequest = {
-    actorType: parsed.data.actorType,
-    actorId,
-    name: parsed.data.name,
-    locale: parsed.data.locale,
-  };
-
-  const existingSeat = findActiveSeatByActorId(actorId);
-  if (existingSeat) {
-    res.status(200).json({
-      matched: existingSeat.room.status === 'playing',
-      ticketId,
-      roomId: existingSeat.room.id,
-      seatToken: existingSeat.seat.seatToken,
-      side: existingSeat.seat.side,
-      state: roomToState(existingSeat.room),
-      reused: true,
-    });
-    return;
-  }
-
-  const existingTicketId = findWaitingTicketByActorId(actorId);
-  if (existingTicketId) {
-    res.status(202).json({ matched: false, ticketId: existingTicketId, reused: true });
-    return;
-  }
-
-  const directJoin = tryJoinOpenWaitingRoom(me);
-  if (directJoin) {
-    res.status(201).json({
-      matched: true,
-      ticketId,
-      roomId: directJoin.roomId,
-      seatToken: directJoin.seatToken,
-      side: directJoin.side,
-      state: directJoin.state,
-    });
-    return;
-  }
-
-  waitingByTicket.set(ticketId, me);
-
-  const opponentTicketId = Array.from(waitingByTicket.entries())
-    .find(([candidateTicketId, candidate]) => candidateTicketId !== ticketId && candidate.actorId !== me.actorId)?.[0];
-
-  if (!opponentTicketId) {
-    res.status(202).json({ matched: false, ticketId });
-    return;
-  }
-
-  assignMatch(opponentTicketId, ticketId);
-  const assignment = assignmentByTicket.get(ticketId);
-  if (!assignment) {
-    res.status(500).json({ error: 'failed to assign matchmaking room' });
-    return;
-  }
-  assignmentByTicket.delete(ticketId);
-  res.status(201).json({
-    matched: true,
-    ticketId,
-    roomId: assignment.roomId,
-    seatToken: assignment.seatToken,
-    side: assignment.side,
-    state: assignment.state,
-  });
-});
-
-app.get('/api/matchmaking/:ticketId', (req, res) => {
-  const assignment = assignmentByTicket.get(req.params.ticketId);
-  if (assignment) {
-    assignmentByTicket.delete(req.params.ticketId);
-    res.json({
-      matched: true,
-      ticketId: assignment.ticketId,
-      roomId: assignment.roomId,
-      seatToken: assignment.seatToken,
-      side: assignment.side,
-      state: assignment.state,
-    });
-    return;
-  }
-
-  if (waitingByTicket.has(req.params.ticketId)) {
-    res.status(202).json({ matched: false, ticketId: req.params.ticketId });
-    return;
-  }
-
-  res.status(404).json({ error: 'ticket not found' });
-});
-
-app.post('/api/rooms/:roomId/join', (req, res) => {
-  const parsed = joinRoomSchema.safeParse(req.body);
-  if (!parsed.success) {
-    res.status(400).json({ error: parsed.error.flatten() });
-    return;
-  }
-
-  const room = rooms.get(req.params.roomId);
-  if (!room) {
-    res.status(404).json({ error: 'room not found' });
-    return;
-  }
-
-  let actorId = uuidv4();
-  if (parsed.data.actorType === 'agent') {
-    const agent = getAgentFromAuth(req);
-    if (!agent) {
-      res.status(401).json({ error: 'invalid agent token' });
-      return;
-    }
-    actorId = agent.id;
-  } else {
-    actorId = parsed.data.clientToken ?? actorId;
-  }
-
-  const existingSeat = room.players.find((p) => p.actorType === parsed.data.actorType && p.actorId === actorId);
-  if (existingSeat) {
-    res.status(200).json({
-      seatToken: existingSeat.seatToken,
-      side: existingSeat.side,
-      state: roomToState(room),
-      reused: true,
-    });
-    return;
-  }
-
-  if (room.players.length >= 2) {
-    res.status(409).json({ error: 'room full' });
-    return;
-  }
-
-  const newSeat: PlayerSeat = {
-    side: 2,
-    actorType: parsed.data.actorType,
-    actorId,
-    name: parsed.data.name,
-    locale: parsed.data.locale,
-    seatToken: uuidv4(),
-  };
-
-  room.players.push(newSeat);
-  room.status = 'playing';
-  room.lastActiveAt[2] = Date.now();
-  seatTokenIndex.set(newSeat.seatToken, { roomId: room.id, side: newSeat.side });
-
-  const state = roomToState(room);
-  broadcastRoom(room.id, { type: 'state', state });
-  res.status(201).json({ seatToken: newSeat.seatToken, side: newSeat.side, state });
-});
-
-app.post('/api/rooms/:roomId/reconnect', (req, res) => {
-  const agent = getAgentFromAuth(req);
-  if (!agent) {
-    res.status(401).json({ error: 'invalid agent token' });
-    return;
-  }
-
-  const room = rooms.get(req.params.roomId);
-  if (!room) {
-    res.status(404).json({ error: 'room not found' });
-    return;
-  }
-
-  const seat = room.players.find((p) => p.actorType === 'agent' && p.actorId === agent.id);
-  if (!seat) {
-    res.status(404).json({ error: 'agent seat not found in room' });
-    return;
-  }
-
-  const newSeatToken = uuidv4();
-  seat.seatToken = newSeatToken;
-  room.lastActiveAt[seat.side] = Date.now();
-  replaceSeatToken(room.id, seat.side, newSeatToken);
-  res.json({ seatToken: newSeatToken, side: seat.side, state: roomToState(room) });
-});
-
-app.post('/api/rooms/:roomId/leave', (req, res) => {
-  const seatToken = getBearerToken(req);
-  if (!seatToken) {
-    res.status(401).json({ error: 'missing seat token' });
-    return;
-  }
-
-  const seat = seatTokenIndex.get(seatToken);
-  if (!seat || seat.roomId !== req.params.roomId) {
-    res.status(401).json({ error: 'invalid seat token' });
-    return;
-  }
-
-  const room = rooms.get(req.params.roomId);
-  if (!room) {
-    res.status(404).json({ error: 'room not found' });
-    return;
-  }
-
-  const shouldCloseRoom = room.createdByRoomApi && seat.side === 1;
-  if (!shouldCloseRoom) {
-    res.json({ closed: false });
-    return;
-  }
-
-  broadcastRoom(room.id, { type: 'room_closed' });
-  recycleRoom(room.id);
-  res.json({ closed: true });
-});
-
-app.get('/api/rooms/:roomId/state', (req, res) => {
-  const room = rooms.get(req.params.roomId);
-  if (!room) {
-    res.status(404).json({ error: 'room not found' });
-    return;
-  }
-
-  settleTurnTimeout(room);
-  res.json(roomToState(room));
-});
-
-app.get('/api/rooms/:roomId/logs', (req, res) => {
-  const room = rooms.get(req.params.roomId);
-  if (!room) {
-    res.status(404).json({ error: 'room not found' });
-    return;
-  }
-  res.json({ roomId: room.id, logs: room.decisionLogs });
-});
-
-app.get('/api/rooms/open', (_req, res) => {
-  cleanupStaleWaitingRooms();
-  const openRooms = Array.from(rooms.values())
-    .filter((room) => room.status === 'waiting' && room.players.length === 1)
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .map((room) => ({
-      roomId: room.id,
-      createdAt: room.createdAt,
-      owner: {
-        actorType: room.players[0].actorType,
-        name: room.players[0].name,
-      },
-    }));
-
-  res.json({ openRooms });
-});
-
-app.get('/api/rooms/active', (_req, res) => {
-  cleanupStaleWaitingRooms();
-  const activeRooms = Array.from(rooms.values())
-    .filter((room) => room.status === 'waiting' || room.status === 'playing')
-    .map((room) => ({
       roomId: room.id,
       status: room.status,
-      createdAt: room.createdAt,
-      players: room.players.map((p) => ({ name: p.name, actorType: p.actorType, side: p.side })),
-    }));
-  res.json({ activeRooms });
-});
-
-app.post('/api/rooms/:roomId/move', (req, res) => {
-  const parsedMove = moveSchema.safeParse(req.body);
-  if (!parsedMove.success) {
-    res.status(400).json({ error: parsedMove.error.flatten() });
-    return;
+      board: room.board,
+      currentTurn: room.currentTurn,
+      turnDeadlineAt,
+      turnTimeoutMs: TURN_TIMEOUT_MS,
+      winner: room.winner,
+      finishReason: room.finishReason,
+      moves: room.moves,
+      players: room.players.map((p) => ({
+        side: p.side,
+        actorType: p.actorType,
+        actorId: p.actorId,
+        name: p.name,
+        locale: p.locale,
+      })),
+      lastMove: room.lastMove,
+      decisionLogs: room.decisionLogs,
+    };
   }
 
-  const seatToken = getBearerToken(req);
-  if (!seatToken) {
-    res.status(401).json({ error: 'missing seat token' });
-    return;
-  }
+  private createRoomWithPlayer(actorType: ActorType, actorId: string, name: string): { room: Room; seat: PlayerSeat } {
+    const roomId = randomId();
+    const seat: PlayerSeat = {
+      side: 1,
+      actorType,
+      actorId,
+      name,
+      locale: undefined,
+      seatToken: randomId(),
+    };
 
-  const seat = seatTokenIndex.get(seatToken);
-  if (!seat || seat.roomId !== req.params.roomId) {
-    res.status(401).json({ error: 'invalid seat token' });
-    return;
-  }
-
-  const room = rooms.get(req.params.roomId);
-  if (!room) {
-    res.status(404).json({ error: 'room not found' });
-    return;
-  }
-
-  settleTurnTimeout(room);
-  if (room.status !== 'playing') {
-    res.status(409).json({ error: 'game not in playing status' });
-    return;
-  }
-
-  if (room.currentTurn !== seat.side) {
-    res.status(409).json({ error: 'not your turn' });
-    return;
-  }
-
-  const { x, y } = parsedMove.data;
-  if (room.board[y][x] !== 0) {
-    res.status(409).json({ error: 'cell already occupied' });
-    return;
-  }
-
-  room.board[y][x] = seat.side;
-  room.lastActiveAt[seat.side] = Date.now();
-  room.moves += 1;
-  room.lastMove = { x, y, side: seat.side };
-  const player = room.players.find((p) => p.side === seat.side);
-  if (parsedMove.data.decision && player) {
-    room.decisionLogs.push({
-      moveNo: room.moves,
-      side: seat.side,
-      playerName: player.name,
-      x,
-      y,
-      source: player.actorType === 'agent' ? 'agent' : 'heuristic',
-      thought: parsedMove.data.decision.thought,
-      thoughtOriginal: parsedMove.data.decision.thoughtOriginal,
+    const room: Room = {
+      id: roomId,
+      createdByRoomApi: true,
+      board: boardEmpty(),
+      status: 'waiting',
+      currentTurn: 1,
+      winner: 0,
+      finishReason: null,
+      moves: 0,
+      players: [seat],
+      lastMove: null,
+      decisionLogs: [],
+      lastActiveAt: { 1: Date.now(), 2: Date.now() },
       createdAt: Date.now(),
+    };
+
+    this.rooms.set(roomId, room);
+    this.seatTokenIndex.set(seat.seatToken, { roomId, side: seat.side });
+    return { room, seat };
+  }
+
+  private createRoomWithPlayers(left: MatchRequest, right: MatchRequest): { room: Room; leftSeat: PlayerSeat; rightSeat: PlayerSeat } {
+    const roomId = randomId();
+    const leftSeat: PlayerSeat = {
+      side: 1,
+      actorType: left.actorType,
+      actorId: left.actorId,
+      name: left.name,
+      locale: left.locale,
+      seatToken: randomId(),
+    };
+    const rightSeat: PlayerSeat = {
+      side: 2,
+      actorType: right.actorType,
+      actorId: right.actorId,
+      name: right.name,
+      locale: right.locale,
+      seatToken: randomId(),
+    };
+
+    const room: Room = {
+      id: roomId,
+      createdByRoomApi: false,
+      board: boardEmpty(),
+      status: 'playing',
+      currentTurn: 1,
+      winner: 0,
+      finishReason: null,
+      moves: 0,
+      players: [leftSeat, rightSeat],
+      lastMove: null,
+      decisionLogs: [],
+      lastActiveAt: { 1: Date.now(), 2: Date.now() },
+      createdAt: Date.now(),
+    };
+
+    this.rooms.set(roomId, room);
+    this.seatTokenIndex.set(leftSeat.seatToken, { roomId, side: leftSeat.side });
+    this.seatTokenIndex.set(rightSeat.seatToken, { roomId, side: rightSeat.side });
+    return { room, leftSeat, rightSeat };
+  }
+
+  private assignMatch(leftTicketId: string, rightTicketId: string): void {
+    const left = this.waitingByTicket.get(leftTicketId);
+    const right = this.waitingByTicket.get(rightTicketId);
+    if (!left || !right) {
+      return;
+    }
+
+    const { room, leftSeat, rightSeat } = this.createRoomWithPlayers(left, right);
+    const state = this.roomToState(room);
+    this.assignmentByTicket.set(leftTicketId, {
+      ticketId: leftTicketId,
+      roomId: room.id,
+      seatToken: leftSeat.seatToken,
+      side: leftSeat.side,
+      state,
     });
+    this.assignmentByTicket.set(rightTicketId, {
+      ticketId: rightTicketId,
+      roomId: room.id,
+      seatToken: rightSeat.seatToken,
+      side: rightSeat.side,
+      state,
+    });
+    this.waitingByTicket.delete(leftTicketId);
+    this.waitingByTicket.delete(rightTicketId);
+    this.broadcastRoom(room.id, { type: 'state', state });
   }
 
-  if (checkWinner(room.board, x, y, seat.side)) {
-    room.status = 'finished';
-    room.winner = seat.side;
-    room.finishReason = 'win';
-    settleAgentStats(room);
-    scheduleFinishedRoomRecycle(room);
-  } else if (room.moves >= BOARD_SIZE * BOARD_SIZE) {
-    room.status = 'finished';
-    room.winner = 0;
-    room.finishReason = 'draw_board_full';
-    settleAgentStats(room);
-    scheduleFinishedRoomRecycle(room);
-  } else {
-    room.currentTurn = room.currentTurn === 1 ? 2 : 1;
+  private findActiveSeatByActorId(actorId: string): { room: Room; seat: PlayerSeat } | null {
+    for (const room of this.rooms.values()) {
+      if (room.status !== 'waiting' && room.status !== 'playing') {
+        continue;
+      }
+      const seat = room.players.find((p) => p.actorId === actorId);
+      if (seat) {
+        return { room, seat };
+      }
+    }
+    return null;
   }
 
-  const state = roomToState(room);
-  broadcastRoom(room.id, { type: 'state', state });
-  res.json(state);
-});
+  private findWaitingTicketByActorId(actorId: string): string | null {
+    for (const [ticketId, entry] of this.waitingByTicket.entries()) {
+      if (entry.actorId === actorId) {
+        return ticketId;
+      }
+    }
+    return null;
+  }
 
-const server = createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+  private tryJoinOpenWaitingRoom(me: MatchRequest): MatchAssignment | null {
+    const openRoom = Array.from(this.rooms.values())
+      .filter((room) => room.status === 'waiting' && room.players.length === 1)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .find((room) => room.players[0].actorId !== me.actorId);
 
-wss.on('connection', (ws, req) => {
-  const url = new URL(req.url ?? '', 'http://localhost');
-  const roomId = url.searchParams.get('roomId');
-  (ws as any).roomId = roomId;
+    if (!openRoom) {
+      return null;
+    }
 
-  if (roomId) {
-    const room = rooms.get(roomId);
-    if (room) {
-      ws.send(JSON.stringify({ type: 'state', state: roomToState(room) }));
+    const newSeat: PlayerSeat = {
+      side: 2,
+      actorType: me.actorType,
+      actorId: me.actorId,
+      name: me.name,
+      locale: me.locale,
+      seatToken: randomId(),
+    };
+
+    openRoom.players.push(newSeat);
+    openRoom.status = 'playing';
+    openRoom.lastActiveAt[2] = Date.now();
+    this.seatTokenIndex.set(newSeat.seatToken, { roomId: openRoom.id, side: newSeat.side });
+
+    const state = this.roomToState(openRoom);
+    this.broadcastRoom(openRoom.id, { type: 'state', state });
+    return {
+      ticketId: randomId(),
+      roomId: openRoom.id,
+      seatToken: newSeat.seatToken,
+      side: newSeat.side,
+      state,
+    };
+  }
+
+  private checkWinner(board: Cell[][], x: number, y: number, side: PlayerSide): boolean {
+    const dirs = [
+      [1, 0],
+      [0, 1],
+      [1, 1],
+      [1, -1],
+    ];
+
+    for (const [dx, dy] of dirs) {
+      let count = 1;
+      let nx = x + dx;
+      let ny = y + dy;
+      while (nx >= 0 && ny >= 0 && nx < BOARD_SIZE && ny < BOARD_SIZE && board[ny][nx] === side) {
+        count += 1;
+        nx += dx;
+        ny += dy;
+      }
+
+      nx = x - dx;
+      ny = y - dy;
+      while (nx >= 0 && ny >= 0 && nx < BOARD_SIZE && ny < BOARD_SIZE && board[ny][nx] === side) {
+        count += 1;
+        nx -= dx;
+        ny -= dy;
+      }
+
+      if (count >= WIN_COUNT) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private getAgentFromAuth(req: Request): AgentIdentity | null {
+    const token = getBearerToken(req);
+    if (!token) {
+      return null;
+    }
+    return this.agentByToken.get(token) ?? null;
+  }
+
+  private replaceSeatToken(roomId: string, side: PlayerSide, newSeatToken: string): void {
+    for (const [token, seat] of this.seatTokenIndex.entries()) {
+      if (seat.roomId === roomId && seat.side === side) {
+        this.seatTokenIndex.delete(token);
+      }
+    }
+    this.seatTokenIndex.set(newSeatToken, { roomId, side });
+  }
+
+  private deleteSeatTokensByRoom(roomId: string): void {
+    for (const [token, seat] of this.seatTokenIndex.entries()) {
+      if (seat.roomId === roomId) {
+        this.seatTokenIndex.delete(token);
+      }
     }
   }
-});
 
-const port = Number(process.env.PORT ?? 8787);
-const waitingRoomCleanupEveryMs = Math.max(1_000, Math.min(WAITING_ROOM_TTL_MS, 30_000));
-const waitingRoomCleanupInterval = setInterval(() => {
-  cleanupStaleWaitingRooms();
-}, waitingRoomCleanupEveryMs);
-waitingRoomCleanupInterval.unref();
+  private recycleRoom(roomId: string): void {
+    this.rooms.delete(roomId);
+    this.deleteSeatTokensByRoom(roomId);
+    const timer = this.roomCleanupTimers.get(roomId);
+    if (timer) {
+      clearTimeout(timer);
+      this.roomCleanupTimers.delete(roomId);
+    }
+  }
 
-server.listen(port, () => {
-  console.log(`clawgame server listening on :${port}`);
-});
+  private scheduleFinishedRoomRecycle(room: Room): void {
+    if (room.status !== 'finished') {
+      return;
+    }
+    if (this.roomCleanupTimers.has(room.id)) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this.recycleRoom(room.id);
+    }, this.finishedRoomTtlMs());
+    this.roomCleanupTimers.set(room.id, timer);
+  }
+
+  private cleanupStaleWaitingRooms(now = Date.now()): void {
+    for (const room of this.rooms.values()) {
+      if (room.status !== 'waiting' || room.players.length !== 1) {
+        continue;
+      }
+      const lastActive = room.lastActiveAt[1] ?? room.createdAt;
+      if (now - lastActive < this.waitingRoomTtlMs()) {
+        continue;
+      }
+      this.recycleRoom(room.id);
+    }
+  }
+
+  private settleTurnTimeout(room: Room): void {
+    if (room.status !== 'playing') {
+      return;
+    }
+    const now = Date.now();
+    const currentSide = room.currentTurn;
+    const currentLastActive = room.lastActiveAt[currentSide] ?? room.createdAt;
+    if (now - currentLastActive <= TURN_TIMEOUT_MS) {
+      return;
+    }
+
+    room.status = 'finished';
+    room.winner = currentSide === 1 ? 2 : 1;
+    room.finishReason = 'opponent_timeout';
+    this.settleAgentStats(room);
+    this.scheduleFinishedRoomRecycle(room);
+    this.broadcastRoom(room.id, { type: 'state', state: this.roomToState(room) });
+  }
+
+  private broadcastRoom(roomId: string, payload: unknown): void {
+    const clients = this.socketsByRoom.get(roomId);
+    if (!clients || clients.size === 0) {
+      return;
+    }
+
+    const serialized = JSON.stringify(payload);
+    for (const ws of clients) {
+      try {
+        ws.send(serialized);
+      } catch {
+        // ignore dead socket
+      }
+    }
+  }
+
+  private settleAgentStats(room: Room): void {
+    if (room.status !== 'finished') {
+      return;
+    }
+    if (!room.finishReason) {
+      return;
+    }
+
+    const finishedAt = Date.now();
+    const durationMs = Math.max(0, finishedAt - room.createdAt);
+
+    for (const player of room.players) {
+      if (player.actorType !== 'agent') {
+        continue;
+      }
+
+      const agent = this.agentById.get(player.actorId);
+      if (!agent) {
+        continue;
+      }
+
+      agent.stats.games += 1;
+      if (room.winner === 0) {
+        agent.stats.draws += 1;
+      } else if (room.winner === player.side) {
+        agent.stats.wins += 1;
+      } else {
+        agent.stats.losses += 1;
+      }
+
+      const opponent = room.players.find((p) => p.side !== player.side) ?? null;
+      const result: AgentMatchHistoryEntry['result'] =
+        room.winner === 0 ? 'draw' : room.winner === player.side ? 'win' : 'loss';
+      const history = this.agentHistoryById.get(agent.id) ?? [];
+      history.push({
+        roomId: room.id,
+        side: player.side,
+        result,
+        finishReason: room.finishReason,
+        opponent: opponent
+          ? { actorType: opponent.actorType, name: opponent.name, actorId: opponent.actorId }
+          : null,
+        mode: opponent?.actorType === 'human' ? 'human_vs_agent' : 'agent_vs_agent',
+        moves: room.moves,
+        durationMs,
+        startedAt: room.createdAt,
+        finishedAt,
+      });
+      if (history.length > this.agentHistoryLimit()) {
+        history.splice(0, history.length - this.agentHistoryLimit());
+      }
+      this.agentHistoryById.set(agent.id, history);
+    }
+  }
+
+  private handleWs(req: Request): Response {
+    const upgrade = req.headers.get('Upgrade');
+    if (!upgrade || upgrade.toLowerCase() !== 'websocket') {
+      return json({ error: 'expected websocket upgrade' }, 426);
+    }
+
+    const url = new URL(req.url);
+    const roomId = url.searchParams.get('roomId');
+    const pair = new WebSocketPair();
+    const client = pair[0];
+    const server = pair[1];
+    server.accept();
+
+    if (roomId) {
+      const set = this.socketsByRoom.get(roomId) ?? new Set<WebSocket>();
+      set.add(server);
+      this.socketsByRoom.set(roomId, set);
+
+      const room = this.rooms.get(roomId);
+      if (room) {
+        server.send(JSON.stringify({ type: 'state', state: this.roomToState(room) }));
+      }
+
+      const cleanup = () => {
+        const current = this.socketsByRoom.get(roomId);
+        if (!current) {
+          return;
+        }
+        current.delete(server);
+        if (current.size === 0) {
+          this.socketsByRoom.delete(roomId);
+        }
+      };
+
+      server.addEventListener('close', cleanup);
+      server.addEventListener('error', cleanup);
+    }
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async fetch(req: Request): Promise<Response> {
+    if (req.method === 'OPTIONS') {
+      return optionsResponse();
+    }
+
+    this.cleanupStaleWaitingRooms();
+
+    const url = new URL(req.url);
+    const { pathname } = url;
+
+    if (pathname === '/ws') {
+      return this.handleWs(req);
+    }
+
+    if (req.method === 'GET' && pathname === '/health') {
+      return json({ ok: true, rooms: this.rooms.size, agentPlayers: this.agentById.size });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/stats/live') {
+      const activeRooms = Array.from(this.rooms.values()).filter((room) =>
+        room.status === 'waiting' || room.status === 'playing',
+      );
+      const activePlayers = activeRooms.reduce((sum, room) => sum + room.players.length, 0);
+      const waitingRooms = activeRooms.filter((room) => room.status === 'waiting' && room.players.length === 1).length + this.waitingByTicket.size;
+      return json({ activePlayers, activeRooms: activeRooms.length, waitingRooms });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/rules') {
+      return json(rules);
+    }
+
+    if (req.method === 'GET' && pathname === '/skill.md') {
+      const baseUrl = getPublicBaseUrl(req, this.env);
+      return text(serverSkillMarkdown(baseUrl), 'text/markdown; charset=utf-8');
+    }
+
+    if (req.method === 'GET' && pathname === '/skill.json') {
+      const baseUrl = getPublicBaseUrl(req, this.env);
+      return json({
+        name: 'clawgame-gomoku',
+        version: '1.0.0',
+        description: 'Join and play Gomoku as an external agent; server is referee only.',
+        homepage: baseUrl,
+        files: {
+          skill: `${baseUrl}/skill.md`,
+          package: `${baseUrl}/skill.json`,
+        },
+      });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/agent/register') {
+      const parsed = registerAgentSchema.safeParse(await parseBody(req));
+      if (!parsed.success) {
+        return json({ error: parsed.error.flatten() }, 400);
+      }
+
+      const agent: AgentIdentity = {
+        id: randomId(),
+        name: parsed.data.name,
+        provider: parsed.data.provider,
+        model: parsed.data.model,
+        token: randomId(),
+        stats: {
+          games: 0,
+          wins: 0,
+          losses: 0,
+          draws: 0,
+        },
+      };
+
+      this.agentByToken.set(agent.token, agent);
+      this.agentById.set(agent.id, agent);
+      this.agentHistoryById.set(agent.id, []);
+
+      return json({ token: agent.token, profile: agent }, 201);
+    }
+
+    if (req.method === 'GET' && pathname === '/api/agent/me') {
+      const agent = this.getAgentFromAuth(req);
+      if (!agent) {
+        return json({ error: 'invalid agent token' }, 401);
+      }
+      return json(agent);
+    }
+
+    if (req.method === 'GET' && pathname === '/api/agent/history') {
+      const agent = this.getAgentFromAuth(req);
+      if (!agent) {
+        return json({ error: 'invalid agent token' }, 401);
+      }
+
+      const limitRaw = Number(url.searchParams.get('limit') ?? 50);
+      const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 50;
+      const fullHistory = this.agentHistoryById.get(agent.id) ?? [];
+      const recent = [...fullHistory].reverse().slice(0, limit);
+
+      const summarize = (items: AgentMatchHistoryEntry[]) => {
+        const games = items.length;
+        const wins = items.filter((h) => h.result === 'win').length;
+        const losses = items.filter((h) => h.result === 'loss').length;
+        const draws = items.filter((h) => h.result === 'draw').length;
+        const totalDurationMs = items.reduce((sum, h) => sum + h.durationMs, 0);
+        const avgDurationMs = games === 0 ? 0 : Math.round(totalDurationMs / games);
+        const shortestDurationMs = games === 0 ? 0 : Math.min(...items.map((h) => h.durationMs));
+        const longestDurationMs = games === 0 ? 0 : Math.max(...items.map((h) => h.durationMs));
+        return {
+          games,
+          wins,
+          losses,
+          draws,
+          winRate: games === 0 ? 0 : Number((wins / games).toFixed(3)),
+          totalDurationMs,
+          avgDurationMs,
+          shortestDurationMs,
+          longestDurationMs,
+        };
+      };
+
+      const vsHuman = fullHistory.filter((h) => h.mode === 'human_vs_agent');
+      const vsAgent = fullHistory.filter((h) => h.mode === 'agent_vs_agent');
+
+      return json({
+        profile: {
+          id: agent.id,
+          name: agent.name,
+          provider: agent.provider,
+          model: agent.model,
+        },
+        summary: {
+          overall: summarize(fullHistory),
+          vsHuman: summarize(vsHuman),
+          vsAgent: summarize(vsAgent),
+        },
+        history: recent,
+      });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/stats/agent') {
+      const leaderboard = Array.from(this.agentById.values())
+        .map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          provider: agent.provider,
+          model: agent.model,
+          ...agent.stats,
+          winRate: agent.stats.games === 0 ? 0 : Number((agent.stats.wins / agent.stats.games).toFixed(3)),
+        }))
+        .sort((a, b) => b.wins - a.wins || b.winRate - a.winRate);
+
+      return json({ leaderboard });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/rooms') {
+      const parsed = createRoomSchema.safeParse(await parseBody(req));
+      if (!parsed.success) {
+        return json({ error: parsed.error.flatten() }, 400);
+      }
+
+      let actorId = randomId();
+      if (parsed.data.actorType === 'agent') {
+        return json({ error: 'agent cannot create room directly; use matchmaking or join by room id' }, 403);
+      }
+      actorId = parsed.data.clientToken ?? actorId;
+
+      const existing = this.findActiveSeatByActorId(actorId);
+      if (existing) {
+        return json({
+          roomId: existing.room.id,
+          seatToken: existing.seat.seatToken,
+          side: existing.seat.side,
+          state: this.roomToState(existing.room),
+          reused: true,
+        });
+      }
+
+      const { room, seat } = this.createRoomWithPlayer(parsed.data.actorType, actorId, parsed.data.name);
+      seat.locale = parsed.data.locale;
+      return json({
+        roomId: room.id,
+        seatToken: seat.seatToken,
+        side: seat.side,
+        state: this.roomToState(room),
+      }, 201);
+    }
+
+    if (req.method === 'POST' && pathname === '/api/matchmaking/join') {
+      const parsed = matchmakingJoinSchema.safeParse(await parseBody(req));
+      if (!parsed.success) {
+        return json({ error: parsed.error.flatten() }, 400);
+      }
+
+      let actorId = randomId();
+      if (parsed.data.actorType === 'agent') {
+        const agent = this.getAgentFromAuth(req);
+        if (!agent) {
+          return json({ error: 'invalid agent token' }, 401);
+        }
+        actorId = agent.id;
+      } else {
+        actorId = parsed.data.clientToken ?? actorId;
+      }
+
+      const ticketId = randomId();
+      const me: MatchRequest = {
+        actorType: parsed.data.actorType,
+        actorId,
+        name: parsed.data.name,
+        locale: parsed.data.locale,
+      };
+
+      const existingSeat = this.findActiveSeatByActorId(actorId);
+      if (existingSeat) {
+        return json({
+          matched: existingSeat.room.status === 'playing',
+          ticketId,
+          roomId: existingSeat.room.id,
+          seatToken: existingSeat.seat.seatToken,
+          side: existingSeat.seat.side,
+          state: this.roomToState(existingSeat.room),
+          reused: true,
+        });
+      }
+
+      const existingTicketId = this.findWaitingTicketByActorId(actorId);
+      if (existingTicketId) {
+        return json({ matched: false, ticketId: existingTicketId, reused: true }, 202);
+      }
+
+      const directJoin = this.tryJoinOpenWaitingRoom(me);
+      if (directJoin) {
+        return json({
+          matched: true,
+          ticketId,
+          roomId: directJoin.roomId,
+          seatToken: directJoin.seatToken,
+          side: directJoin.side,
+          state: directJoin.state,
+        }, 201);
+      }
+
+      this.waitingByTicket.set(ticketId, me);
+
+      const opponentTicketId = Array.from(this.waitingByTicket.entries())
+        .find(([candidateTicketId, candidate]) => candidateTicketId !== ticketId && candidate.actorId !== me.actorId)?.[0];
+
+      if (!opponentTicketId) {
+        return json({ matched: false, ticketId }, 202);
+      }
+
+      this.assignMatch(opponentTicketId, ticketId);
+      const assignment = this.assignmentByTicket.get(ticketId);
+      if (!assignment) {
+        return json({ error: 'failed to assign matchmaking room' }, 500);
+      }
+      this.assignmentByTicket.delete(ticketId);
+      return json({
+        matched: true,
+        ticketId,
+        roomId: assignment.roomId,
+        seatToken: assignment.seatToken,
+        side: assignment.side,
+        state: assignment.state,
+      }, 201);
+    }
+
+    const matchmakingMatch = pathname.match(/^\/api\/matchmaking\/([^/]+)$/);
+    if (req.method === 'GET' && matchmakingMatch) {
+      const ticketId = matchmakingMatch[1];
+      const assignment = this.assignmentByTicket.get(ticketId);
+      if (assignment) {
+        this.assignmentByTicket.delete(ticketId);
+        return json({
+          matched: true,
+          ticketId: assignment.ticketId,
+          roomId: assignment.roomId,
+          seatToken: assignment.seatToken,
+          side: assignment.side,
+          state: assignment.state,
+        });
+      }
+
+      if (this.waitingByTicket.has(ticketId)) {
+        return json({ matched: false, ticketId }, 202);
+      }
+
+      return json({ error: 'ticket not found' }, 404);
+    }
+
+    const joinMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/join$/);
+    if (req.method === 'POST' && joinMatch) {
+      const roomId = joinMatch[1];
+      const parsed = joinRoomSchema.safeParse(await parseBody(req));
+      if (!parsed.success) {
+        return json({ error: parsed.error.flatten() }, 400);
+      }
+
+      const room = this.rooms.get(roomId);
+      if (!room) {
+        return json({ error: 'room not found' }, 404);
+      }
+
+      let actorId = randomId();
+      if (parsed.data.actorType === 'agent') {
+        const agent = this.getAgentFromAuth(req);
+        if (!agent) {
+          return json({ error: 'invalid agent token' }, 401);
+        }
+        actorId = agent.id;
+      } else {
+        actorId = parsed.data.clientToken ?? actorId;
+      }
+
+      const existingSeat = room.players.find((p) => p.actorType === parsed.data.actorType && p.actorId === actorId);
+      if (existingSeat) {
+        return json({
+          seatToken: existingSeat.seatToken,
+          side: existingSeat.side,
+          state: this.roomToState(room),
+          reused: true,
+        });
+      }
+
+      if (room.players.length >= 2) {
+        return json({ error: 'room full' }, 409);
+      }
+
+      const newSeat: PlayerSeat = {
+        side: 2,
+        actorType: parsed.data.actorType,
+        actorId,
+        name: parsed.data.name,
+        locale: parsed.data.locale,
+        seatToken: randomId(),
+      };
+
+      room.players.push(newSeat);
+      room.status = 'playing';
+      room.lastActiveAt[2] = Date.now();
+      this.seatTokenIndex.set(newSeat.seatToken, { roomId: room.id, side: newSeat.side });
+
+      const state = this.roomToState(room);
+      this.broadcastRoom(room.id, { type: 'state', state });
+      return json({ seatToken: newSeat.seatToken, side: newSeat.side, state }, 201);
+    }
+
+    const reconnectMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/reconnect$/);
+    if (req.method === 'POST' && reconnectMatch) {
+      const roomId = reconnectMatch[1];
+      const agent = this.getAgentFromAuth(req);
+      if (!agent) {
+        return json({ error: 'invalid agent token' }, 401);
+      }
+
+      const room = this.rooms.get(roomId);
+      if (!room) {
+        return json({ error: 'room not found' }, 404);
+      }
+
+      const seat = room.players.find((p) => p.actorType === 'agent' && p.actorId === agent.id);
+      if (!seat) {
+        return json({ error: 'agent seat not found in room' }, 404);
+      }
+
+      const newSeatToken = randomId();
+      seat.seatToken = newSeatToken;
+      room.lastActiveAt[seat.side] = Date.now();
+      this.replaceSeatToken(room.id, seat.side, newSeatToken);
+      return json({ seatToken: newSeatToken, side: seat.side, state: this.roomToState(room) });
+    }
+
+    const leaveMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/leave$/);
+    if (req.method === 'POST' && leaveMatch) {
+      const roomId = leaveMatch[1];
+      const seatToken = getBearerToken(req);
+      if (!seatToken) {
+        return json({ error: 'missing seat token' }, 401);
+      }
+
+      const seat = this.seatTokenIndex.get(seatToken);
+      if (!seat || seat.roomId !== roomId) {
+        return json({ error: 'invalid seat token' }, 401);
+      }
+
+      const room = this.rooms.get(roomId);
+      if (!room) {
+        return json({ error: 'room not found' }, 404);
+      }
+
+      const shouldCloseRoom = room.createdByRoomApi && seat.side === 1;
+      if (!shouldCloseRoom) {
+        return json({ closed: false });
+      }
+
+      this.broadcastRoom(room.id, { type: 'room_closed' });
+      this.recycleRoom(room.id);
+      return json({ closed: true });
+    }
+
+    const stateMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/state$/);
+    if (req.method === 'GET' && stateMatch) {
+      const roomId = stateMatch[1];
+      const room = this.rooms.get(roomId);
+      if (!room) {
+        return json({ error: 'room not found' }, 404);
+      }
+
+      this.settleTurnTimeout(room);
+      return json(this.roomToState(room));
+    }
+
+    const logsMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/logs$/);
+    if (req.method === 'GET' && logsMatch) {
+      const roomId = logsMatch[1];
+      const room = this.rooms.get(roomId);
+      if (!room) {
+        return json({ error: 'room not found' }, 404);
+      }
+      return json({ roomId: room.id, logs: room.decisionLogs });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/rooms/open') {
+      const openRooms = Array.from(this.rooms.values())
+        .filter((room) => room.status === 'waiting' && room.players.length === 1)
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map((room) => ({
+          roomId: room.id,
+          createdAt: room.createdAt,
+          owner: {
+            actorType: room.players[0].actorType,
+            name: room.players[0].name,
+          },
+        }));
+
+      return json({ openRooms });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/rooms/active') {
+      const activeRooms = Array.from(this.rooms.values())
+        .filter((room) => room.status === 'waiting' || room.status === 'playing')
+        .map((room) => ({
+          roomId: room.id,
+          status: room.status,
+          createdAt: room.createdAt,
+          players: room.players.map((p) => ({ name: p.name, actorType: p.actorType, side: p.side })),
+        }));
+      return json({ activeRooms });
+    }
+
+    const moveMatch = pathname.match(/^\/api\/rooms\/([^/]+)\/move$/);
+    if (req.method === 'POST' && moveMatch) {
+      const roomId = moveMatch[1];
+      const parsedMove = moveSchema.safeParse(await parseBody(req));
+      if (!parsedMove.success) {
+        return json({ error: parsedMove.error.flatten() }, 400);
+      }
+
+      const seatToken = getBearerToken(req);
+      if (!seatToken) {
+        return json({ error: 'missing seat token' }, 401);
+      }
+
+      const seat = this.seatTokenIndex.get(seatToken);
+      if (!seat || seat.roomId !== roomId) {
+        return json({ error: 'invalid seat token' }, 401);
+      }
+
+      const room = this.rooms.get(roomId);
+      if (!room) {
+        return json({ error: 'room not found' }, 404);
+      }
+
+      this.settleTurnTimeout(room);
+      if (room.status !== 'playing') {
+        return json({ error: 'game not in playing status' }, 409);
+      }
+
+      if (room.currentTurn !== seat.side) {
+        return json({ error: 'not your turn' }, 409);
+      }
+
+      const { x, y } = parsedMove.data;
+      if (room.board[y][x] !== 0) {
+        return json({ error: 'cell already occupied' }, 409);
+      }
+
+      room.board[y][x] = seat.side;
+      room.lastActiveAt[seat.side] = Date.now();
+      room.moves += 1;
+      room.lastMove = { x, y, side: seat.side };
+      const player = room.players.find((p) => p.side === seat.side);
+      if (parsedMove.data.decision && player) {
+        room.decisionLogs.push({
+          moveNo: room.moves,
+          side: seat.side,
+          playerName: player.name,
+          x,
+          y,
+          source: player.actorType === 'agent' ? 'agent' : 'heuristic',
+          thought: parsedMove.data.decision.thought,
+          thoughtOriginal: parsedMove.data.decision.thoughtOriginal,
+          createdAt: Date.now(),
+        });
+      }
+
+      if (this.checkWinner(room.board, x, y, seat.side)) {
+        room.status = 'finished';
+        room.winner = seat.side;
+        room.finishReason = 'win';
+        this.settleAgentStats(room);
+        this.scheduleFinishedRoomRecycle(room);
+      } else if (room.moves >= BOARD_SIZE * BOARD_SIZE) {
+        room.status = 'finished';
+        room.winner = 0;
+        room.finishReason = 'draw_board_full';
+        this.settleAgentStats(room);
+        this.scheduleFinishedRoomRecycle(room);
+      } else {
+        room.currentTurn = room.currentTurn === 1 ? 2 : 1;
+      }
+
+      const state = this.roomToState(room);
+      this.broadcastRoom(room.id, { type: 'state', state });
+      return json(state);
+    }
+
+    return json({ error: 'not found' }, 404);
+  }
+}
+
+export default {
+  async fetch(req: Request, env: Env): Promise<Response> {
+    if (req.method === 'OPTIONS') {
+      return optionsResponse();
+    }
+
+    const url = new URL(req.url);
+    if (url.pathname === '/favicon.ico') {
+      return new Response(null, { status: 204 });
+    }
+
+    const id = env.LOBBY.idFromName('global');
+    const stub = env.LOBBY.get(id);
+    return stub.fetch(req);
+  },
+};
