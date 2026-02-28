@@ -27,12 +27,14 @@ type GameState = {
 const emptyBoard = () => Array.from({ length: 15 }, () => Array.from({ length: 15 }, () => 0 as Cell));
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
+  const mergedHeaders = new Headers(init?.headers);
+  if (!mergedHeaders.has('content-type')) {
+    mergedHeaders.set('content-type', 'application/json');
+  }
+
   const res = await fetch(url, {
-    headers: {
-      'content-type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
     ...init,
+    headers: mergedHeaders,
   });
 
   if (!res.ok) {

@@ -63,3 +63,8 @@ Update 2026-02-28 (gomoku intent clarification):
 - Extended RulesResponse with objective + strategyHints.
 - Updated README and protocol docs to recommend explicit win-oriented prompt wording.
 - Verified build + e2e pass.
+
+Update 2026-02-28 (human move failure fix):
+- Fixed web jsonFetch header merge bug where per-request headers overwrote default content-type.
+- Now POST move requests consistently send application/json, preventing express.json parse failures.
+- Verified build + e2e pass.
