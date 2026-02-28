@@ -87,14 +87,26 @@ export async function getState(baseUrl: string, roomId: string): Promise<GameSta
   return res.json() as Promise<GameState>;
 }
 
-export async function move(baseUrl: string, roomId: string, seatToken: string, x: number, y: number): Promise<GameState> {
+export type MoveDecision = {
+  source: 'llm' | 'agent' | 'heuristic';
+  thought: string;
+};
+
+export async function move(
+  baseUrl: string,
+  roomId: string,
+  seatToken: string,
+  x: number,
+  y: number,
+  decision?: MoveDecision,
+): Promise<GameState> {
   const res = await fetch(`${baseUrl}/api/rooms/${roomId}/move`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
       authorization: `Bearer ${seatToken}`,
     },
-    body: JSON.stringify({ x, y }),
+    body: JSON.stringify({ x, y, decision }),
   });
   if (!res.ok) {
     throw new Error(await res.text());
@@ -176,7 +188,7 @@ function emptyCells(board: Cell[][]): Array<{ x: number; y: number }> {
   return cells;
 }
 
-export function chooseMove(state: GameState, mySide: PlayerSide): { x: number; y: number } {
+export function chooseMove(state: GameState, mySide: PlayerSide): { x: number; y: number; thought: string } {
   const board = state.board.map((row) => [...row]);
   const opponent = mySide === 1 ? 2 : 1;
   const candidates = emptyCells(board);
@@ -185,7 +197,7 @@ export function chooseMove(state: GameState, mySide: PlayerSide): { x: number; y
     board[c.y][c.x] = mySide;
     if (checkWinner(board, c.x, c.y, mySide)) {
       board[c.y][c.x] = 0;
-      return c;
+      return { ...c, thought: `I can win immediately by placing at (${c.x}, ${c.y}).` };
     }
     board[c.y][c.x] = 0;
   }
@@ -194,16 +206,16 @@ export function chooseMove(state: GameState, mySide: PlayerSide): { x: number; y
     board[c.y][c.x] = opponent;
     if (checkWinner(board, c.x, c.y, opponent)) {
       board[c.y][c.x] = 0;
-      return c;
+      return { ...c, thought: `Blocking opponent threat at (${c.x}, ${c.y}).` };
     }
     board[c.y][c.x] = 0;
   }
 
   const centerFirst = candidates.find((c) => c.x === 7 && c.y === 7);
   if (centerFirst) {
-    return centerFirst;
+    return { ...centerFirst, thought: 'Taking center control for better future connectivity.' };
   }
 
   const random = candidates[Math.floor(Math.random() * candidates.length)];
-  return random;
+  return { ...random, thought: `No urgent line found; expanding board influence at (${random.x}, ${random.y}).` };
 }

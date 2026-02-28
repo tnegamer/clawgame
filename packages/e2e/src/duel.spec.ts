@@ -1,10 +1,7 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import { expect, test } from '@playwright/test';
-
-const execFileAsync = promisify(execFile);
 
 test('two AI players can finish one gomoku duel', async ({ request }) => {
   const rules = await request.get('http://localhost:8787/api/rules');
@@ -82,7 +79,7 @@ test('two AI players can finish one gomoku duel', async ({ request }) => {
   expect(stats.leaderboard.length).toBeGreaterThanOrEqual(2);
 });
 
-test('skill prompt flow is published and autonomous duel can finish', async ({ request }) => {
+test('skill prompt flow is published and web spectator sees live llm decision logs', async ({ request, page }) => {
   const skillRes = await request.get('http://localhost:8787/skill.md');
   expect(skillRes.ok()).toBeTruthy();
   const skillText = await skillRes.text();
@@ -93,14 +90,42 @@ test('skill prompt flow is published and autonomous duel can finish', async ({ r
   const rootDir = path.resolve(thisDir, '../../..');
   const tsxBin = path.join(rootDir, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
   const duelScript = path.join(rootDir, 'packages', 'ai-bot', 'src', 'autonomous-duel.ts');
-  const { stdout } = await execFileAsync(tsxBin, [duelScript], {
+  const duelChild = spawn(tsxBin, [duelScript], {
     cwd: rootDir,
-    env: {
-      ...process.env,
-      BASE_URL: 'http://localhost:8787',
-    },
-    timeout: 45_000,
+    env: { ...process.env, BASE_URL: 'http://localhost:8787' },
   });
 
+  let stdout = '';
+  let stderr = '';
+  duelChild.stdout.on('data', (buf) => {
+    stdout += buf.toString();
+  });
+  duelChild.stderr.on('data', (buf) => {
+    stderr += buf.toString();
+  });
+
+  const roomId = await new Promise<string>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`timeout waiting room id\n${stdout}\n${stderr}`)), 20_000);
+    const check = () => {
+      const line = stdout.split('\n').find((l) => l.includes('joined room='));
+      const match = line?.match(/room=([a-f0-9-]+)/);
+      if (match?.[1]) {
+        clearTimeout(timeout);
+        resolve(match[1]);
+      }
+    };
+    duelChild.stdout.on('data', check);
+    check();
+  });
+
+  await page.goto(`http://localhost:5173/?roomId=${roomId}`);
+  await expect(page.getByRole('heading', { name: 'LLM 决策日志' })).toBeVisible();
+  await expect(page.locator('.log-item').first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.log-item').first()).toContainText('来源: llm');
+
+  const duelExitCode = await new Promise<number | null>((resolve) => {
+    duelChild.on('close', (code) => resolve(code));
+  });
+  expect(duelExitCode).toBe(0);
   expect(stdout).toContain('game finished winner=');
 });

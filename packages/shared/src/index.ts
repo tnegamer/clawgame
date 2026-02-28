@@ -34,6 +34,18 @@ export interface GameState {
     name: string;
   }[];
   lastMove: { x: number; y: number; side: PlayerSide } | null;
+  decisionLogs: DecisionLog[];
+}
+
+export interface DecisionLog {
+  moveNo: number;
+  side: PlayerSide;
+  playerName: string;
+  x: number;
+  y: number;
+  source: 'llm' | 'agent' | 'heuristic';
+  thought: string;
+  createdAt: number;
 }
 
 export interface RulesResponse {

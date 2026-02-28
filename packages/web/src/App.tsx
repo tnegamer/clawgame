@@ -12,6 +12,16 @@ type GameState = {
   moves: number;
   players: { side: 1 | 2; actorType: 'human' | 'ai'; actorId: string; name: string }[];
   lastMove: { x: number; y: number; side: 1 | 2 } | null;
+  decisionLogs: {
+    moveNo: number;
+    side: 1 | 2;
+    playerName: string;
+    x: number;
+    y: number;
+    source: 'llm' | 'agent' | 'heuristic';
+    thought: string;
+    createdAt: number;
+  }[];
 };
 
 const emptyBoard = () => Array.from({ length: 15 }, () => Array.from({ length: 15 }, () => 0 as Cell));
@@ -48,8 +58,18 @@ export default function App() {
     moves: 0,
     players: [],
     lastMove: null,
+    decisionLogs: [],
   });
   const [msg, setMsg] = useState('准备就绪');
+
+  useEffect(() => {
+    const presetRoomId = new URLSearchParams(window.location.search).get('roomId');
+    if (presetRoomId) {
+      setRoomId(presetRoomId);
+      setRoomInput(presetRoomId);
+      setMsg(`观战模式: ${presetRoomId}`);
+    }
+  }, []);
 
   useEffect(() => {
     if (!roomId) {
@@ -147,6 +167,8 @@ export default function App() {
     }
   }
 
+  const recentLogs = [...state.decisionLogs].slice(-40).reverse();
+
   return (
     <main>
       <h1>ClawGame - 五子棋 AI 对战平台</h1>
@@ -165,39 +187,56 @@ export default function App() {
         <p>当前消息: {msg}</p>
       </section>
 
-      <section className="panel">
-        <p>房间: {roomId || '-'}</p>
-        <p>
-          状态: {state.status} | 当前回合: {state.currentTurn === 1 ? '黑子(先手)' : '白子'} | 已落子: {state.moves}
-        </p>
-        <p>
-          玩家: {state.players.map((p) => `${p.side === 1 ? '黑' : '白'}-${p.name}(${p.actorType})`).join(' vs ') || '-'}
-        </p>
-        <p>
-          结果:{' '}
-          {state.status === 'finished'
-            ? state.winner === 0
-              ? '平局'
-              : state.winner === 1
-                ? '黑子胜'
-                : '白子胜'
-            : '进行中'}
-        </p>
-        <div className="grid">
-          {state.board.map((row, y) =>
-            row.map((cell, x) => (
-              <button
-                key={`${x}-${y}`}
-                className="cell"
-                onClick={() => place(x, y)}
-                disabled={cell !== 0 || state.status !== 'playing' || state.currentTurn !== mySide}
-                aria-label={`cell-${x}-${y}`}
-              >
-                {cell !== 0 && <span className={`stone ${cell === 1 ? 'black' : 'white'}`} />}
-              </button>
-            )),
-          )}
+      <section className="panel board-layout">
+        <div>
+          <p>房间: {roomId || '-'}</p>
+          <p>
+            状态: {state.status} | 当前回合: {state.currentTurn === 1 ? '黑子(先手)' : '白子'} | 已落子: {state.moves}
+          </p>
+          <p>
+            玩家: {state.players.map((p) => `${p.side === 1 ? '黑' : '白'}-${p.name}(${p.actorType})`).join(' vs ') || '-'}
+          </p>
+          <p>
+            结果:{' '}
+            {state.status === 'finished'
+              ? state.winner === 0
+                ? '平局'
+                : state.winner === 1
+                  ? '黑子胜'
+                  : '白子胜'
+              : '进行中'}
+          </p>
+          <div className="grid">
+            {state.board.map((row, y) =>
+              row.map((cell, x) => (
+                <button
+                  key={`${x}-${y}`}
+                  className="cell"
+                  onClick={() => place(x, y)}
+                  disabled={cell !== 0 || state.status !== 'playing' || state.currentTurn !== mySide}
+                  aria-label={`cell-${x}-${y}`}
+                >
+                  {cell !== 0 && <span className={`stone ${cell === 1 ? 'black' : 'white'}`} />}
+                </button>
+              )),
+            )}
+          </div>
         </div>
+        <aside className="log-panel" aria-label="llm-decision-log">
+          <h3>LLM 决策日志</h3>
+          {recentLogs.length === 0 && <p>暂无日志，等待 AI 落子...</p>}
+          {recentLogs.map((log) => (
+            <div className="log-item" key={`${log.moveNo}-${log.createdAt}`}>
+              <div>
+                第 {log.moveNo} 手 | {log.side === 1 ? '黑' : '白'} | {log.playerName}
+              </div>
+              <div>
+                落子: ({log.x}, {log.y}) | 来源: {log.source}
+              </div>
+              <div>{log.thought}</div>
+            </div>
+          ))}
+        </aside>
       </section>
     </main>
   );

@@ -1,11 +1,17 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const baseUrl = process.env.BASE_URL ?? 'http://localhost:8787';
+const thisDir = path.dirname(fileURLToPath(import.meta.url));
+const packageDir = path.resolve(thisDir, '..');
+const tsxBin = path.resolve(packageDir, '..', '..', 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
+const botScript = path.resolve(thisDir, 'bot.ts');
 
 function runBot(name: string, env: Record<string, string>): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('npm', ['run', 'bot'], {
-      cwd: new URL('..', import.meta.url).pathname,
+    const child = spawn(tsxBin, [botScript], {
+      cwd: packageDir,
       env: {
         ...process.env,
         BASE_URL: baseUrl,
@@ -65,4 +71,8 @@ if (!winnerLine) {
   throw new Error('autonomous duel finished without winner output');
 }
 
-console.log(JSON.stringify({ ok: true, winnerLine }));
+const roomLine = `${leftOutput}\n${rightOutput}`
+  .split('\n')
+  .find((line) => line.includes('joined room='));
+const roomId = roomLine?.match(/room=([a-f0-9-]+)/)?.[1];
+console.log(JSON.stringify({ ok: true, roomId, winnerLine }));

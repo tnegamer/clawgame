@@ -5,6 +5,7 @@ const roomId = process.env.ROOM_ID;
 const botName = process.env.BOT_NAME ?? `codex-bot-${Date.now()}`;
 const provider = process.env.BOT_PROVIDER ?? 'codex';
 const model = process.env.BOT_MODEL ?? 'gpt-5';
+const decisionSource = (process.env.DECISION_SOURCE ?? 'llm') as 'llm' | 'agent' | 'heuristic';
 const joinWaitMs = Number(process.env.JOIN_WAIT_MS ?? 12_000);
 const pollMs = Number(process.env.POLL_MS ?? 300);
 const allowCreate = (process.env.ALLOW_CREATE ?? 'true') !== 'false';
@@ -34,6 +35,9 @@ while (true) {
   }
 
   const next = chooseMove(state, seat.side);
-  await move(baseUrl, seat.roomId, seat.seatToken, next.x, next.y);
+  await move(baseUrl, seat.roomId, seat.seatToken, next.x, next.y, {
+    source: decisionSource,
+    thought: next.thought,
+  });
   await new Promise((resolve) => setTimeout(resolve, 120));
 }

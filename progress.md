@@ -41,3 +41,11 @@ Update 2026-02-28 (codex prompt flow):
 - Updated README to codex-cli prompt-only gameplay flow (no npm duel/bot script required for user).
 - Updated E2E to run autonomous duel via direct tsx invocation instead of npm run script wrapper.
 - Re-verified build + e2e pass.
+
+Update 2026-02-28 (spectator + decision logs):
+- Added per-move decision logs in server state (`decisionLogs`) with source + thought payload.
+- Added `/api/rooms/:roomId/logs` endpoint and updated skill.md guidance to include decision logging.
+- Updated web UI with right-side real-time LLM decision log panel and spectator URL support (`?roomId=`).
+- Updated autonomous duel to run bots directly via `tsx` and emit room id in output.
+- Extended E2E to open web spectator and assert live LLM decision logs appear.
+- Verified build + e2e pass; also verified visual layout via develop-web-game screenshot.

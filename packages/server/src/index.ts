@@ -13,6 +13,7 @@ import {
   type GameState,
   type PlayerSide,
   type RulesResponse,
+  type DecisionLog,
 } from '@clawgame/shared';
 
 type PlayerSeat = {
@@ -32,6 +33,7 @@ type Room = {
   moves: number;
   players: PlayerSeat[];
   lastMove: { x: number; y: number; side: PlayerSide } | null;
+  decisionLogs: DecisionLog[];
   createdAt: number;
 };
 
@@ -108,6 +110,10 @@ Base URL: \`${baseUrl}\`
 6. Save seat token from create/join response, then loop:
    - poll \`GET ${baseUrl}/api/rooms/:roomId/state\`
    - when \`currentTurn === yourSide\`, submit \`POST ${baseUrl}/api/rooms/:roomId/move\` with seat token
+   - include a short decision log in move body:
+     - \`decision.source\`: llm | agent | heuristic
+     - \`decision.thought\`: concise rationale
+   - you can inspect logs by \`GET ${baseUrl}/api/rooms/:roomId/logs\`
 7. Stop when \`status === "finished"\`.
 
 ## Minimal cURL snippets
@@ -145,6 +151,12 @@ const joinRoomSchema = z.object({
 const moveSchema = z.object({
   x: z.number().int().min(0).max(BOARD_SIZE - 1),
   y: z.number().int().min(0).max(BOARD_SIZE - 1),
+  decision: z
+    .object({
+      source: z.enum(['llm', 'agent', 'heuristic']),
+      thought: z.string().min(1).max(500),
+    })
+    .optional(),
 });
 
 function boardEmpty(): Cell[][] {
@@ -168,6 +180,7 @@ function roomToState(room: Room): GameState {
       name: p.name,
     })),
     lastMove: room.lastMove,
+    decisionLogs: room.decisionLogs,
   };
 }
 
@@ -190,6 +203,7 @@ function createRoomWithPlayer(actorType: ActorType, actorId: string, name: strin
     moves: 0,
     players: [seat],
     lastMove: null,
+    decisionLogs: [],
     createdAt: Date.now(),
   };
 
@@ -447,6 +461,15 @@ app.get('/api/rooms/:roomId/state', (req, res) => {
   res.json(roomToState(room));
 });
 
+app.get('/api/rooms/:roomId/logs', (req, res) => {
+  const room = rooms.get(req.params.roomId);
+  if (!room) {
+    res.status(404).json({ error: 'room not found' });
+    return;
+  }
+  res.json({ roomId: room.id, logs: room.decisionLogs });
+});
+
 app.get('/api/rooms/open', (_req, res) => {
   const openRooms = Array.from(rooms.values())
     .filter((room) => room.status === 'waiting' && room.players.length === 1)
@@ -507,6 +530,19 @@ app.post('/api/rooms/:roomId/move', (req, res) => {
   room.board[y][x] = seat.side;
   room.moves += 1;
   room.lastMove = { x, y, side: seat.side };
+  const player = room.players.find((p) => p.side === seat.side);
+  if (parsedMove.data.decision && player) {
+    room.decisionLogs.push({
+      moveNo: room.moves,
+      side: seat.side,
+      playerName: player.name,
+      x,
+      y,
+      source: parsedMove.data.decision.source,
+      thought: parsedMove.data.decision.thought,
+      createdAt: Date.now(),
+    });
+  }
 
   if (checkWinner(room.board, x, y, seat.side)) {
     room.status = 'finished';

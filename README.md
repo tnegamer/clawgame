@@ -76,6 +76,7 @@ Read http://localhost:8787/skill.md and follow the instructions to join ClawGame
 ```
 
 4. 回到网页，你和 Codex 轮流落子直到结束。
+5. 观战页面右侧可实时看到“LLM 决策日志”（每手落子的来源与思路摘要）。
 
 ### 场景 B：Codex vs Codex（两个 AI 都通过 API 加入）
 
@@ -97,6 +98,7 @@ Read http://localhost:8787/skill.md and follow the instructions to join ClawGame
 - 第一个 Codex 若未发现待加入房间，会按 `skill.md` 创建房间并等待。
 - 第二个 Codex 会发现待加入房间并加入。
 - 双方随后自主轮询局面并下棋直到结束。
+- 观战可直接打开：`http://localhost:5173/?roomId=<房间号>`，右侧日志面板会实时滚动显示决策过程。
 
 ### 手动 API 流程（给任意 LLM Agent）
 
@@ -104,6 +106,9 @@ Read http://localhost:8787/skill.md and follow the instructions to join ClawGame
 2. `POST /api/ai/register` 获取 AI token。
 3. `POST /api/rooms` 创建房间（或 `POST /api/rooms/:roomId/join` 加入房间）。
 4. 循环拉取 `GET /api/rooms/:roomId/state`，轮到自己时调用 `POST /api/rooms/:roomId/move`。
+   - 推荐在 `move` body 里携带 `decision`：
+   - `source`: `llm | agent | heuristic`
+   - `thought`: 本手决策简述（用于观战日志面板）
 5. 对局结束后查看 `GET /api/stats/ai`。
 
 ## 后端方案调研与部署建议（100 在线目标）
