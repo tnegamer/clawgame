@@ -699,12 +699,12 @@ button:disabled {
 
 @media (max-width: 640px) {
   body {
-    padding: 10px;
+    padding: 8px;
   }
 
   .title {
-    font-size: 1.8rem;
-    margin: 0.2rem 0 0.8rem;
+    font-size: 1.7rem;
+    margin: 0.2rem 0 0.6rem;
   }
 
   .title-pixel {
@@ -712,79 +712,136 @@ button:disabled {
   }
 
   .panel {
-    padding: 12px;
+    padding: 10px;
     margin-bottom: 12px;
   }
 
   .home-stats {
     padding: 8px;
-    font-size: 0.9rem;
+    font-size: 0.8rem;
+    gap: 8px;
+  }
+
+  .home-stats-value {
+    font-size: 1.4rem !important;
   }
 
   .home-tab {
-    padding: 8px 12px;
-    font-size: 0.95rem;
+    padding: 6px 10px;
+    font-size: 0.85rem;
   }
 
   /* Board Optimization */
   .grid {
-    grid-template-columns: repeat(15, 23px);
-    grid-template-rows: repeat(15, 23px);
+    grid-template-columns: repeat(15, 20px);
+    grid-template-rows: repeat(15, 20px);
     gap: 1px;
     padding: 2px;
-    border-width: 2px;
+    border-width: 3px;
+    width: fit-content;
+    margin: 0 auto;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
   }
 
   .cell {
-    width: 23px;
-    height: 23px;
+    width: 20px;
+    height: 20px;
     border-width: 1px;
-    border-radius: 2px;
+    border-radius: 1px;
   }
 
   .stone {
-    width: 20px;
-    height: 20px;
+    width: 18px;
+    height: 18px;
     border-width: 2px !important;
   }
 
   .board-wrapper {
-    padding: 8px;
-    border-radius: 8px;
+    padding: 20px 12px;
+    border-radius: 12px;
+    width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
   }
 
   .board-info {
-    font-size: 0.9rem;
+    font-size: 0.85rem;
     margin-bottom: 8px;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
   .status-badge {
     padding: 2px 8px;
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     border-width: 2px;
   }
 
-  /* Room Header */
+  /* Room Header & Room ID */
   .room-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
     margin-bottom: 12px;
-    padding-bottom: 8px;
+    padding-bottom: 12px;
   }
 
   .room-header .title-pixel {
     font-size: 1.1rem !important;
   }
 
-  .room-header .title-pixel span {
-    font-size: 0.75rem !important;
+  .room-header input {
+    width: 100% !important;
+    max-width: none !important;
+    box-sizing: border-box;
   }
 
   .room-logo {
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
+  }
+
+  /* Game Container layout on mobile */
+  .game-container {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .log-panel {
+    height: 350px;
+  }
+
+  .log-item {
+    font-size: 0.85rem;
   }
 
   .game-start-banner {
-    font-size: 2.2rem;
+    font-size: 2rem;
+  }
+
+  .finish-banner {
+    width: 85%;
+    font-size: 1.1rem;
+    padding: 16px 20px;
+  }
+
+  .modal-card {
+    width: 90%;
+    max-width: none;
+  }
+
+  .player-label {
+    font-size: 0.85rem !important;
+    gap: 4px !important;
+  }
+
+  .player-label.active {
+    transform: scale(1.05);
   }
 }
 

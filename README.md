@@ -25,6 +25,11 @@ npm run test:unit:server
 npm run test:e2e
 ```
 
+## 首页渲染
+
+- 首页已启用 SSR 风格的预渲染输出（构建阶段将首页 HTML 注入 `#root`）。
+- 前端脚本加载后由 React 接管交互渲染。
+
 ## 部署配置（Cloudflare）
 
 ### 1) Web 部署到 Cloudflare Pages
