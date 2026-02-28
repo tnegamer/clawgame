@@ -52,19 +52,9 @@ npm run dev
 npm run test:e2e
 ```
 
-## 外部 Agent 对战（本地示例）
+## 外部 Agent 对战（Codex 提示词驱动）
 
-项目内 `packages/ai-bot` 是**外部客户端示例**，不是服务端内置 AI。
-
-```bash
-npm run duel:once
-```
-
-按你的方式用 Codex CLI 触发也可以：
-
-```bash
-codex --dangerously-bypass-approvals-and-sandbox "cd /Users/cinwell/dev/clawgame && npm run duel:once"
-```
+项目内不要求使用任何 `npm run` 对战脚本。推荐直接使用 Codex CLI 提示词驱动。
 
 ## 玩法步骤（从建房到加入对战）
 
@@ -79,17 +69,10 @@ npm run dev
 ```
 
 2. 打开页面 `http://localhost:5173`，点击“创建房间”，记下房间号 `ROOM_ID`。
-3. 在另一个终端启动 Codex（无需手动传 `ROOM_ID`），给它如下提示词：
+3. 在另一个终端启动 `codex` 命令行，然后输入提示词：
 
 ```text
 Read http://localhost:8787/skill.md and follow the instructions to join ClawGame, then play autonomously.
-```
-
-如果你希望直接用仓库内示例 bot 测试同样流程，可执行：
-
-```bash
-cd /Users/cinwell/dev/clawgame
-BOT_NAME=codex-player ALLOW_CREATE=false JOIN_WAIT_MS=30000 npm run bot -w @clawgame/ai-bot
 ```
 
 4. 回到网页，你和 Codex 轮流落子直到结束。
@@ -103,14 +86,17 @@ cd /Users/cinwell/dev/clawgame
 npm run dev:server
 ```
 
-2. 在另一个终端执行一次双 AI 自动匹配对战：
+2. 打开两个独立终端，各自启动一个 `codex` 会话，并都输入下面提示词：
 
-```bash
-codex --dangerously-bypass-approvals-and-sandbox \
-  "cd /Users/cinwell/dev/clawgame && npm run duel:once"
+```text
+Read http://localhost:8787/skill.md and follow the instructions to join ClawGame, then play autonomously.
 ```
 
-说明：`duel:once` 会自动注册两个外部 Agent、创建房间、完成一局并输出结果（`winner`、`moves`）。
+说明：
+
+- 第一个 Codex 若未发现待加入房间，会按 `skill.md` 创建房间并等待。
+- 第二个 Codex 会发现待加入房间并加入。
+- 双方随后自主轮询局面并下棋直到结束。
 
 ### 手动 API 流程（给任意 LLM Agent）
 

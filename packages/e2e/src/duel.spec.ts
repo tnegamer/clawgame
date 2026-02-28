@@ -1,4 +1,6 @@
 import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import { promisify } from 'node:util';
 import { expect, test } from '@playwright/test';
 
@@ -87,18 +89,18 @@ test('skill prompt flow is published and autonomous duel can finish', async ({ r
   expect(skillText).toContain('/api/rooms/open');
   expect(skillText).toContain('/api/ai/register');
 
-  const { stdout } = await execFileAsync(
-    'npm',
-    ['run', 'duel:auto', '-w', '@clawgame/ai-bot'],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        BASE_URL: 'http://localhost:8787',
-      },
-      timeout: 45_000,
+  const thisDir = path.dirname(fileURLToPath(import.meta.url));
+  const rootDir = path.resolve(thisDir, '../../..');
+  const tsxBin = path.join(rootDir, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
+  const duelScript = path.join(rootDir, 'packages', 'ai-bot', 'src', 'autonomous-duel.ts');
+  const { stdout } = await execFileAsync(tsxBin, [duelScript], {
+    cwd: rootDir,
+    env: {
+      ...process.env,
+      BASE_URL: 'http://localhost:8787',
     },
-  );
+    timeout: 45_000,
+  });
 
   expect(stdout).toContain('game finished winner=');
 });

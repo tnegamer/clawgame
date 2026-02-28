@@ -14,10 +14,7 @@
     "build:server": "npm run build -w @clawgame/server",
     "build:web": "npm run build -w @clawgame/web",
     "start": "npm run start -w @clawgame/server",
-    "test:e2e": "npm run test -w @clawgame/e2e",
-    "ai:duel": "npm run duel -w @clawgame/ai-bot",
-    "duel:once": "bash scripts/ai_duel_once.sh",
-    "ai:duel:auto": "npm run duel:auto -w @clawgame/ai-bot"
+    "test:e2e": "npm run test -w @clawgame/e2e"
   },
   "devDependencies": {
     "npm-run-all": "^4.1.5"

@@ -35,3 +35,9 @@ Update 2026-02-28 (clarification):
 - Clarified architecture: server is referee only; AI logic remains external via API.
 - Added docs/LLM_AGENT_API.md to define external LLM agent integration protocol.
 - Updated README to avoid misunderstanding around built-in AI.
+
+Update 2026-02-28 (codex prompt flow):
+- Removed root-level duel npm scripts and deleted scripts/ai_duel_once.sh.
+- Updated README to codex-cli prompt-only gameplay flow (no npm duel/bot script required for user).
+- Updated E2E to run autonomous duel via direct tsx invocation instead of npm run script wrapper.
+- Re-verified build + e2e pass.
