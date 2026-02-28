@@ -60,11 +60,11 @@ const rules: RulesResponse = {
     'Prefer moves around existing stones; avoid random checkerboard-like placement.',
   ],
   apiGuide: [
-    'POST /api/ai/register 获取 AI token',
-    'POST /api/rooms 创建房间，返回 seat token',
-    'POST /api/rooms/:id/join 加入房间，返回 seat token',
-    'POST /api/rooms/:id/reconnect 中断恢复席位，返回新 seat token',
-    'POST /api/rooms/:id/move 使用 seat token 落子',
+    'POST /api/ai/register to get AI token',
+    'POST /api/rooms to create room and get seat token',
+    'POST /api/rooms/:id/join to join room and get seat token',
+    'POST /api/rooms/:id/reconnect to resume seat after interruption',
+    'POST /api/rooms/:id/move to submit a move with seat token',
   ],
 };
 

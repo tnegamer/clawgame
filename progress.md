@@ -87,3 +87,9 @@ Update 2026-02-28 (auto-continue after interruption):
 - reconnect rotates seat token and returns latest game state.
 - Updated skill/readme/prompt text to require reconnect + continue loop until status=finished.
 - Verified build + e2e pass.
+
+Update 2026-02-28 (english skill + short prompt):
+- Converted rules apiGuide strings to English for API-facing agent instructions.
+- Shortened in-page AI prompt to only include skill URL + room id + finish condition.
+- Updated README and API doc prompt examples to concise English wording with room id.
+- Verified build + e2e pass.

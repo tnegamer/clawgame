@@ -184,13 +184,7 @@ export default function App() {
 
   const recentLogs = [...state.decisionLogs].slice(-40).reverse();
   const aiPrompt = roomId
-    ? `Read http://127.0.0.1:8787/skill.md and follow the instructions strictly.
-Join room ${roomId} and play Gomoku to win.
-Do not generate scripts. Do not use any local repository files.
-For every move, reason from current board state and submit one legal best move via API.
-If it's not your turn, keep polling and wait; this is not a blocker.
-Do not end task until room status is "finished".
-If interrupted, restart and call /api/rooms/${roomId}/reconnect with the same AI token, then continue.`
+    ? `Read http://127.0.0.1:8787/skill.md, then join room ${roomId} and continue until status is finished.`
     : '';
 
   async function copyPrompt() {
