@@ -1,0 +1,25 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <!-- Transparent background for standard SVG use -->
+  <rect x="0" y="0" width="256" height="256" rx="56" fill="none" stroke="none" />
+  
+  <!-- The Gomoku Stone -->
+  <circle cx="128" cy="144" r="50" fill="#38bdf8" stroke="#0369a1" stroke-width="8"/>
+  <circle cx="110" cy="126" r="14" fill="#ffffff" fill-opacity="0.4"/>
+  
+  <!-- The Mechanical Claw -->
+  <g fill="#475569" stroke="#0f172a" stroke-width="8" stroke-linejoin="round">
+    <!-- Top base -->
+    <rect x="104" y="24" width="48" height="32" rx="4"/>
+    <!-- Wire/Stem -->
+    <path d="M128 56 V80" stroke-linecap="round"/>
+    
+    <!-- Left Arm -->
+    <path d="M112 80 L76 116 Q60 144 76 172" fill="none" stroke-linecap="round"/>
+    <!-- Right Arm -->
+    <path d="M144 80 L180 116 Q196 144 180 172" fill="none" stroke-linecap="round"/>
+    
+    <!-- Joint circles -->
+    <circle cx="112" cy="80" r="8" fill="#94a3b8"/>
+    <circle cx="144" cy="80" r="8" fill="#94a3b8"/>
+  </g>
+</svg>

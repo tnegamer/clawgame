@@ -27,6 +27,7 @@ type PlayerSeat = {
 
 type Room = {
   id: string;
+  createdByRoomApi: boolean;
   board: Cell[][];
   status: 'waiting' | 'playing' | 'finished';
   currentTurn: PlayerSide;
@@ -82,6 +83,7 @@ const agentById = new Map<string, AgentIdentity>();
 const seatTokenIndex = new Map<string, { roomId: string; side: PlayerSide }>();
 const TURN_TIMEOUT_MS = 120_000;
 const FINISHED_ROOM_TTL_MS = Number(process.env.FINISHED_ROOM_TTL_MS ?? 30_000);
+const WAITING_ROOM_TTL_MS = Number(process.env.WAITING_ROOM_TTL_MS ?? 300_000);
 const AGENT_HISTORY_LIMIT = Number(process.env.AGENT_HISTORY_LIMIT ?? 200);
 const roomCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const waitingByTicket = new Map<string, MatchRequest>();
@@ -238,18 +240,21 @@ const createRoomSchema = z.object({
   actorType: z.enum(['human', 'agent']),
   name: z.string().min(1).max(50),
   locale: z.string().min(2).max(20).optional(),
+  clientToken: z.string().min(1).max(100).optional(),
 });
 
 const joinRoomSchema = z.object({
   actorType: z.enum(['human', 'agent']),
   name: z.string().min(1).max(50),
   locale: z.string().min(2).max(20).optional(),
+  clientToken: z.string().min(1).max(100).optional(),
 });
 
 const matchmakingJoinSchema = z.object({
   actorType: z.enum(['human', 'agent']),
   name: z.string().min(1).max(50),
   locale: z.string().min(2).max(20).optional(),
+  clientToken: z.string().min(1).max(100).optional(),
 });
 
 const moveSchema = z.object({
@@ -310,6 +315,7 @@ function createRoomWithPlayer(actorType: ActorType, actorId: string, name: strin
 
   const room: Room = {
     id: roomId,
+    createdByRoomApi: true,
     board: boardEmpty(),
     status: 'waiting',
     currentTurn: 1,
@@ -349,6 +355,7 @@ function createRoomWithPlayers(left: MatchRequest, right: MatchRequest): { room:
 
   const room: Room = {
     id: roomId,
+    createdByRoomApi: false,
     board: boardEmpty(),
     status: 'playing',
     currentTurn: 1,
@@ -394,6 +401,63 @@ function assignMatch(leftTicketId: string, rightTicketId: string) {
   waitingByTicket.delete(leftTicketId);
   waitingByTicket.delete(rightTicketId);
   broadcastRoom(room.id, { type: 'state', state });
+}
+
+function findActiveSeatByActorId(actorId: string): { room: Room; seat: PlayerSeat } | null {
+  for (const room of rooms.values()) {
+    if (room.status !== 'waiting' && room.status !== 'playing') {
+      continue;
+    }
+    const seat = room.players.find((p) => p.actorId === actorId);
+    if (seat) {
+      return { room, seat };
+    }
+  }
+  return null;
+}
+
+function findWaitingTicketByActorId(actorId: string): string | null {
+  for (const [ticketId, entry] of waitingByTicket.entries()) {
+    if (entry.actorId === actorId) {
+      return ticketId;
+    }
+  }
+  return null;
+}
+
+function tryJoinOpenWaitingRoom(me: MatchRequest): MatchAssignment | null {
+  const openRoom = Array.from(rooms.values())
+    .filter((room) => room.status === 'waiting' && room.players.length === 1)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .find((room) => room.players[0].actorId !== me.actorId);
+
+  if (!openRoom) {
+    return null;
+  }
+
+  const newSeat: PlayerSeat = {
+    side: 2,
+    actorType: me.actorType,
+    actorId: me.actorId,
+    name: me.name,
+    locale: me.locale,
+    seatToken: uuidv4(),
+  };
+
+  openRoom.players.push(newSeat);
+  openRoom.status = 'playing';
+  openRoom.lastActiveAt[2] = Date.now();
+  seatTokenIndex.set(newSeat.seatToken, { roomId: openRoom.id, side: newSeat.side });
+
+  const state = roomToState(openRoom);
+  broadcastRoom(openRoom.id, { type: 'state', state });
+  return {
+    ticketId: uuidv4(),
+    roomId: openRoom.id,
+    seatToken: newSeat.seatToken,
+    side: newSeat.side,
+    state,
+  };
 }
 
 function checkWinner(board: Cell[][], x: number, y: number, side: PlayerSide): boolean {
@@ -488,6 +552,19 @@ function scheduleFinishedRoomRecycle(room: Room) {
   roomCleanupTimers.set(room.id, timer);
 }
 
+function cleanupStaleWaitingRooms(now = Date.now()) {
+  for (const room of rooms.values()) {
+    if (room.status !== 'waiting' || room.players.length !== 1) {
+      continue;
+    }
+    const lastActive = room.lastActiveAt[1] ?? room.createdAt;
+    if (now - lastActive < WAITING_ROOM_TTL_MS) {
+      continue;
+    }
+    recycleRoom(room.id);
+  }
+}
+
 function settleTurnTimeout(room: Room) {
   if (room.status !== 'playing') {
     return;
@@ -579,6 +656,7 @@ app.get('/health', (_req, res) => {
 });
 
 app.get('/api/stats/live', (_req, res) => {
+  cleanupStaleWaitingRooms();
   const activeRooms = Array.from(rooms.values()).filter((room) =>
     room.status === 'waiting' || room.status === 'playing',
   );
@@ -733,6 +811,19 @@ app.post('/api/rooms', (req, res) => {
     res.status(403).json({ error: 'agent cannot create room directly; use matchmaking or join by room id' });
     return;
   }
+  actorId = parsed.data.clientToken ?? actorId;
+
+  const existing = findActiveSeatByActorId(actorId);
+  if (existing) {
+    res.status(200).json({
+      roomId: existing.room.id,
+      seatToken: existing.seat.seatToken,
+      side: existing.seat.side,
+      state: roomToState(existing.room),
+      reused: true,
+    });
+    return;
+  }
 
   const { room, seat } = createRoomWithPlayer(parsed.data.actorType, actorId, parsed.data.name);
   seat.locale = parsed.data.locale;
@@ -759,6 +850,8 @@ app.post('/api/matchmaking/join', (req, res) => {
       return;
     }
     actorId = agent.id;
+  } else {
+    actorId = parsed.data.clientToken ?? actorId;
   }
 
   const ticketId = uuidv4();
@@ -768,6 +861,40 @@ app.post('/api/matchmaking/join', (req, res) => {
     name: parsed.data.name,
     locale: parsed.data.locale,
   };
+
+  const existingSeat = findActiveSeatByActorId(actorId);
+  if (existingSeat) {
+    res.status(200).json({
+      matched: existingSeat.room.status === 'playing',
+      ticketId,
+      roomId: existingSeat.room.id,
+      seatToken: existingSeat.seat.seatToken,
+      side: existingSeat.seat.side,
+      state: roomToState(existingSeat.room),
+      reused: true,
+    });
+    return;
+  }
+
+  const existingTicketId = findWaitingTicketByActorId(actorId);
+  if (existingTicketId) {
+    res.status(202).json({ matched: false, ticketId: existingTicketId, reused: true });
+    return;
+  }
+
+  const directJoin = tryJoinOpenWaitingRoom(me);
+  if (directJoin) {
+    res.status(201).json({
+      matched: true,
+      ticketId,
+      roomId: directJoin.roomId,
+      seatToken: directJoin.seatToken,
+      side: directJoin.side,
+      state: directJoin.state,
+    });
+    return;
+  }
+
   waitingByTicket.set(ticketId, me);
 
   const opponentTicketId = Array.from(waitingByTicket.entries())
@@ -831,11 +958,6 @@ app.post('/api/rooms/:roomId/join', (req, res) => {
     return;
   }
 
-  if (room.players.length >= 2) {
-    res.status(409).json({ error: 'room full' });
-    return;
-  }
-
   let actorId = uuidv4();
   if (parsed.data.actorType === 'agent') {
     const agent = getAgentFromAuth(req);
@@ -844,6 +966,24 @@ app.post('/api/rooms/:roomId/join', (req, res) => {
       return;
     }
     actorId = agent.id;
+  } else {
+    actorId = parsed.data.clientToken ?? actorId;
+  }
+
+  const existingSeat = room.players.find((p) => p.actorType === parsed.data.actorType && p.actorId === actorId);
+  if (existingSeat) {
+    res.status(200).json({
+      seatToken: existingSeat.seatToken,
+      side: existingSeat.side,
+      state: roomToState(room),
+      reused: true,
+    });
+    return;
+  }
+
+  if (room.players.length >= 2) {
+    res.status(409).json({ error: 'room full' });
+    return;
   }
 
   const newSeat: PlayerSeat = {
@@ -891,6 +1031,36 @@ app.post('/api/rooms/:roomId/reconnect', (req, res) => {
   res.json({ seatToken: newSeatToken, side: seat.side, state: roomToState(room) });
 });
 
+app.post('/api/rooms/:roomId/leave', (req, res) => {
+  const seatToken = getBearerToken(req);
+  if (!seatToken) {
+    res.status(401).json({ error: 'missing seat token' });
+    return;
+  }
+
+  const seat = seatTokenIndex.get(seatToken);
+  if (!seat || seat.roomId !== req.params.roomId) {
+    res.status(401).json({ error: 'invalid seat token' });
+    return;
+  }
+
+  const room = rooms.get(req.params.roomId);
+  if (!room) {
+    res.status(404).json({ error: 'room not found' });
+    return;
+  }
+
+  const shouldCloseRoom = room.createdByRoomApi && seat.side === 1;
+  if (!shouldCloseRoom) {
+    res.json({ closed: false });
+    return;
+  }
+
+  broadcastRoom(room.id, { type: 'room_closed' });
+  recycleRoom(room.id);
+  res.json({ closed: true });
+});
+
 app.get('/api/rooms/:roomId/state', (req, res) => {
   const room = rooms.get(req.params.roomId);
   if (!room) {
@@ -912,6 +1082,7 @@ app.get('/api/rooms/:roomId/logs', (req, res) => {
 });
 
 app.get('/api/rooms/open', (_req, res) => {
+  cleanupStaleWaitingRooms();
   const openRooms = Array.from(rooms.values())
     .filter((room) => room.status === 'waiting' && room.players.length === 1)
     .sort((a, b) => b.createdAt - a.createdAt)
@@ -928,6 +1099,7 @@ app.get('/api/rooms/open', (_req, res) => {
 });
 
 app.get('/api/rooms/active', (_req, res) => {
+  cleanupStaleWaitingRooms();
   const activeRooms = Array.from(rooms.values())
     .filter((room) => room.status === 'waiting' || room.status === 'playing')
     .map((room) => ({
@@ -1037,6 +1209,12 @@ wss.on('connection', (ws, req) => {
 });
 
 const port = Number(process.env.PORT ?? 8787);
+const waitingRoomCleanupEveryMs = Math.max(1_000, Math.min(WAITING_ROOM_TTL_MS, 30_000));
+const waitingRoomCleanupInterval = setInterval(() => {
+  cleanupStaleWaitingRooms();
+}, waitingRoomCleanupEveryMs);
+waitingRoomCleanupInterval.unref();
+
 server.listen(port, () => {
   console.log(`clawgame server listening on :${port}`);
 });

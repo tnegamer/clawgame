@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Check, Users, Shield, Bot, Play, ScrollText, Sun, Moon, Globe } from 'lucide-react';
+import { Copy, Check, Users, Shield, Bot, Play, ScrollText, Sun, Moon, Globe, X } from 'lucide-react';
+import confetti from 'canvas-confetti';
 
 type Cell = 0 | 1 | 2;
 type Status = 'waiting' | 'playing' | 'finished';
@@ -37,6 +38,8 @@ type LiveStats = {
 
 const emptyBoard = () => Array.from({ length: 15 }, () => Array.from({ length: 15 }, () => 0 as Cell));
 const ROOM_SESSION_KEY_PREFIX = 'clawgame:room-session:';
+const HUMAN_TOKEN_KEY = 'clawgame:human-token';
+const LAST_ROOM_ID_KEY = 'clawgame:last-room-id';
 
 type RoomSession = {
   seatToken: string;
@@ -85,6 +88,30 @@ function loadRoomSession(roomId: string): RoomSession | null {
 function clearRoomSession(roomId: string): void {
   if (!roomId) return;
   localStorage.removeItem(roomSessionKey(roomId));
+}
+
+function getOrCreateHumanToken(): string {
+  const existed = localStorage.getItem(HUMAN_TOKEN_KEY);
+  if (existed) return existed;
+  const token =
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  localStorage.setItem(HUMAN_TOKEN_KEY, token);
+  return token;
+}
+
+function saveLastRoomId(roomId: string): void {
+  if (!roomId) return;
+  localStorage.setItem(LAST_ROOM_ID_KEY, roomId);
+}
+
+function loadLastRoomId(): string {
+  return localStorage.getItem(LAST_ROOM_ID_KEY) ?? '';
+}
+
+function clearLastRoomId(): void {
+  localStorage.removeItem(LAST_ROOM_ID_KEY);
 }
 
 function normalizeRoomIdInput(value: string): string {
@@ -136,6 +163,7 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
 
 export default function App() {
   const { t, i18n } = useTranslation();
+  const humanToken = getOrCreateHumanToken();
 
   const [name, setName] = useState(() => t('defaults.humanPlayer'));
   const [joinName, setJoinName] = useState(() => t('defaults.humanGuest'));
@@ -150,6 +178,17 @@ export default function App() {
   const [liveStats, setLiveStats] = useState<LiveStats>({ activePlayers: 0, activeRooms: 0, waitingRooms: 0 });
   const [homeTab, setHomeTab] = useState<'agent' | 'human'>('agent');
   const [nowTs, setNowTs] = useState(Date.now());
+  const [joinPromptRoomId, setJoinPromptRoomId] = useState<string | null>(null);
+  const [joinPromptName, setJoinPromptName] = useState('');
+  const [dismissedBanner, setDismissedBanner] = useState(false);
+
+  useEffect(() => {
+    if (state.status !== 'finished') {
+      setDismissedBanner(false);
+    }
+  }, [state.status]);
+  const roomAlertedRef = useRef(false);
+  const joinPromptedRoomRef = useRef<string | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') ||
       (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -176,18 +215,37 @@ export default function App() {
     window.history.replaceState({}, '', url.toString());
   }
 
-  useEffect(() => {
-    const presetRoomId = new URLSearchParams(window.location.search).get('roomId');
-    if (presetRoomId) {
-      setRoomId(presetRoomId);
-      setRoomInput(presetRoomId);
-      const savedSession = loadRoomSession(presetRoomId);
-      if (savedSession) {
-        setSeatToken(savedSession.seatToken);
-        setMySide(savedSession.mySide);
-        setMsg(t('messages.rejoinedGame'));
-      }
+  async function tryRestoreRoomFromSession(nextRoomId: string): Promise<boolean> {
+    const savedSession = loadRoomSession(nextRoomId);
+    if (!savedSession) {
+      return false;
     }
+
+    try {
+      const restoredState = await jsonFetch<GameState>(`/api/rooms/${nextRoomId}/state`);
+      setRoomId(nextRoomId);
+      setRoomInput(nextRoomId);
+      setSeatToken(savedSession.seatToken);
+      setMySide(savedSession.mySide);
+      setState(restoredState);
+      syncRoomToUrl(nextRoomId);
+      saveLastRoomId(nextRoomId);
+      setMsg(t('messages.rejoinedGame'));
+      return true;
+    } catch {
+      clearRoomSession(nextRoomId);
+      return false;
+    }
+  }
+
+  useEffect(() => {
+    const presetRoomId = new URLSearchParams(window.location.search).get('roomId') ?? '';
+    const initialRoomId = presetRoomId || loadLastRoomId();
+    if (!initialRoomId) return;
+
+    setRoomId(initialRoomId);
+    setRoomInput(initialRoomId);
+    void tryRestoreRoomFromSession(initialRoomId);
   }, [t]);
 
   useEffect(() => {
@@ -195,6 +253,7 @@ export default function App() {
       return;
     }
     saveRoomSession(roomId, seatToken, mySide);
+    saveLastRoomId(roomId);
   }, [roomId, seatToken, mySide]);
 
   useEffect(() => {
@@ -202,6 +261,7 @@ export default function App() {
       return;
     }
     clearRoomSession(roomId);
+    clearLastRoomId();
   }, [roomId, state.status]);
 
   useEffect(() => {
@@ -228,9 +288,17 @@ export default function App() {
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?roomId=${roomId}`);
     ws.onmessage = (evt) => {
       try {
-        const payload = JSON.parse(evt.data) as { type: string; state: GameState };
+        const payload = JSON.parse(evt.data) as { type: string; state?: GameState };
         if (payload.type === 'state') {
-          setState(payload.state);
+          if (payload.state) {
+            setState(payload.state);
+          }
+          return;
+        }
+        if (payload.type === 'room_closed') {
+          clearRoomSession(roomId);
+          clearLastRoomId();
+          alertAndBackHome(t('messages.roomClosedByOwner'));
         }
       } catch {
         setMsg(websocketParseFailed);
@@ -242,7 +310,9 @@ export default function App() {
         const next = await jsonFetch<GameState>(`/api/rooms/${roomId}/state`);
         setState(next);
       } catch {
-        // ignore in poll
+        clearRoomSession(roomId);
+        clearLastRoomId();
+        alertAndBackHome(t('messages.noActiveBattle'));
       }
     }, 1000);
 
@@ -250,7 +320,20 @@ export default function App() {
       ws.close();
       clearInterval(timer);
     };
-  }, [roomId, websocketParseFailed]);
+  }, [roomId, websocketParseFailed, t]);
+
+  useEffect(() => {
+    if (!roomId || mySide !== 0) {
+      return;
+    }
+    if (state.status === 'waiting' && state.players.length === 1) {
+      void promptJoinWaitingRoom(roomId);
+      return;
+    }
+    if (state.status !== 'waiting') {
+      joinPromptedRoomRef.current = null;
+    }
+  }, [roomId, mySide, state.status, state.players.length, joinName, humanToken, t]);
 
   useEffect(() => {
     if (state.status !== 'playing') {
@@ -259,6 +342,53 @@ export default function App() {
     const timer = setInterval(() => setNowTs(Date.now()), 250);
     return () => clearInterval(timer);
   }, [state.status, state.currentTurn, state.turnDeadlineAt]);
+
+  useEffect(() => {
+    if (state.status !== 'finished' || mySide === 0) return;
+
+    if (state.winner === mySide) {
+      const duration = 2500;
+      const end = Date.now() + duration;
+      const frame = () => {
+        confetti({
+          particleCount: 6,
+          angle: 60,
+          spread: 80,
+          origin: { x: 0, y: 0.6 },
+          colors: ['#38bdf8', '#818cf8', '#a78bfa', '#f472b6', '#fb923c', '#fbbf24']
+        });
+        confetti({
+          particleCount: 6,
+          angle: 120,
+          spread: 80,
+          origin: { x: 1, y: 0.6 },
+          colors: ['#38bdf8', '#818cf8', '#a78bfa', '#f472b6', '#fb923c', '#fbbf24']
+        });
+
+        if (Date.now() < end) {
+          requestAnimationFrame(frame);
+        }
+      };
+      frame();
+    } else if (state.winner !== 0) {
+      confetti({
+        particleCount: 100,
+        spread: 120,
+        origin: { y: -0.1 },
+        colors: ['#cbd5e1', '#94a3b8', '#64748b', '#475569'],
+        gravity: 0.5,
+        ticks: 300,
+        startVelocity: 20
+      });
+    } else {
+      confetti({
+        particleCount: 100,
+        spread: 100,
+        origin: { y: 0.5 },
+        colors: ['#fcd34d', '#fbbf24', '#f59e0b']
+      });
+    }
+  }, [state.status, state.winner, mySide]);
 
   useEffect(() => {
     (window as any).render_game_to_text = () =>
@@ -278,14 +408,38 @@ export default function App() {
       if (!roomId || state.status !== 'playing' || mySide === 0) {
         return;
       }
+      if (seatToken) {
+        void fetch(`/api/rooms/${roomId}/leave`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${seatToken}` },
+          keepalive: true,
+        });
+      }
       event.preventDefault();
       event.returnValue = '';
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [roomId, state.status, mySide]);
+  }, [roomId, state.status, mySide, seatToken]);
 
-  function backToHome() {
+  async function leaveRoomIfNeeded() {
+    if (!roomId || !seatToken) {
+      return;
+    }
+    try {
+      await fetch(`/api/rooms/${roomId}/leave`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${seatToken}` },
+      });
+    } catch {
+      // ignore leave errors
+    }
+  }
+
+  async function backToHome() {
+    await leaveRoomIfNeeded();
+    clearRoomSession(roomId);
+    clearLastRoomId();
     syncRoomToUrl('');
     setRoomId('');
     setSeatToken('');
@@ -294,12 +448,70 @@ export default function App() {
     setMsg('');
   }
 
+  function alertAndBackHome(message: string) {
+    if (roomAlertedRef.current) {
+      return;
+    }
+    roomAlertedRef.current = true;
+    window.alert(message);
+    void backToHome();
+  }
+
+  async function promptJoinWaitingRoom(waitingRoomId: string) {
+    if (joinPromptedRoomRef.current === waitingRoomId) {
+      return;
+    }
+    joinPromptedRoomRef.current = waitingRoomId;
+    setJoinPromptName(joinName);
+    setJoinPromptRoomId(waitingRoomId);
+  }
+
+  function closeJoinPrompt() {
+    setJoinPromptRoomId(null);
+  }
+
+  async function confirmJoinPrompt() {
+    if (!joinPromptRoomId) {
+      return;
+    }
+    const nextName = joinPromptName.trim() || joinName;
+    setJoinPromptName(nextName);
+    setMsg(t('messages.joining'));
+    try {
+      const payload = await jsonFetch<{ seatToken: string; side: 1 | 2; state: GameState }>(
+        `/api/rooms/${joinPromptRoomId}/join`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            actorType: 'human',
+            name: nextName,
+            locale: getSystemLocale(),
+            clientToken: humanToken,
+          }),
+        },
+      );
+      setJoinName(nextName);
+      setRoomInput(joinPromptRoomId);
+      setRoomId(joinPromptRoomId);
+      syncRoomToUrl(joinPromptRoomId);
+      setSeatToken(payload.seatToken);
+      setMySide(payload.side);
+      setState(payload.state);
+      saveRoomSession(joinPromptRoomId, payload.seatToken, payload.side);
+      setJoinPromptRoomId(null);
+      setMsg('');
+    } catch (e) {
+      setJoinPromptRoomId(null);
+      setMsg(`${t('messages.joinFailed')}: ${(e as Error).message}`);
+    }
+  }
+
   async function createRoom() {
     setMsg(t('messages.creating'));
     try {
       const payload = await jsonFetch<{ roomId: string; seatToken: string; side: 1 | 2; state: GameState }>('/api/rooms', {
         method: 'POST',
-        body: JSON.stringify({ actorType: 'human', name, locale: getSystemLocale() }),
+        body: JSON.stringify({ actorType: 'human', name, locale: getSystemLocale(), clientToken: humanToken }),
       });
       setRoomId(payload.roomId);
       syncRoomToUrl(payload.roomId);
@@ -318,10 +530,13 @@ export default function App() {
     if (!normalizedRoomId) return;
 
     setMsg(t('messages.joining'));
+    if (await tryRestoreRoomFromSession(normalizedRoomId)) {
+      return;
+    }
     try {
       const payload = await jsonFetch<{ seatToken: string; side: 1 | 2; state: GameState }>(`/api/rooms/${normalizedRoomId}/join`, {
         method: 'POST',
-        body: JSON.stringify({ actorType: 'human', name: joinName, locale: getSystemLocale() }),
+        body: JSON.stringify({ actorType: 'human', name: joinName, locale: getSystemLocale(), clientToken: humanToken }),
       });
       setRoomInput(normalizedRoomId);
       setRoomId(normalizedRoomId);
@@ -348,7 +563,7 @@ export default function App() {
         state?: GameState;
       }>('/api/matchmaking/join', {
         method: 'POST',
-        body: JSON.stringify({ actorType: 'human', name: joinName, locale: getSystemLocale() }),
+        body: JSON.stringify({ actorType: 'human', name: joinName, locale: getSystemLocale(), clientToken: humanToken }),
       });
 
       const applyMatch = (payload: { roomId: string; seatToken: string; side: 1 | 2; state: GameState }) => {
@@ -461,8 +676,8 @@ export default function App() {
     return (
       <div className="home-container">
         <div className="home-card panel">
-          <h1 className="title" style={{ cursor: 'pointer' }} onClick={backToHome}>ClawGame</h1>
-          <p style={{ textAlign: 'center', color: '#94a3b8', marginBottom: '2rem' }}>
+          <h1 className="title title-pixel" style={{ cursor: 'pointer' }} onClick={backToHome}>ClawGame</h1>
+          <p style={{ textAlign: 'center', color: '#94a3b8', marginBottom: '1rem' }}>
             {t('app.tagline')}
           </p>
 
@@ -498,9 +713,6 @@ export default function App() {
                   <Bot size={18} color="#38bdf8" /> {t('home.copyPromptForAgent')}
                 </h3>
                 <textarea className="prompt-box" value={homeAgentPrompt} readOnly />
-                <p className="home-prompt-tip">
-                  {t('home.homePromptTip')}
-                </p>
                 <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'flex-end' }}>
                   <button className="secondary" onClick={() => copyPrompt(homeAgentPrompt, 'home')}>
                     {copiedHomePrompt ? <Check size={16} /> : <Copy size={16} />}
@@ -564,16 +776,19 @@ export default function App() {
     return (
       <div style={{ width: '100%' }}>
         <div className="room-header">
-          <h2 style={{ margin: 0 }}>
-            <span
-              style={{ color: '#38bdf8', cursor: 'pointer' }}
-              onClick={backToHome}
+          <div
+            style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer' }}
+            onClick={backToHome}
+          >
+            <img src="/logo.svg" alt="Logo" className="room-logo" />
+            <h2
+              className="title-pixel"
+              style={{ margin: 0, fontSize: '1.4rem' }}
               title={t('room.backHome')}
             >
-              Claw
-            </span>
-            {t('room.roomArenaSuffix')}
-          </h2>
+              ClawGame x 五子棋
+            </h2>
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <span style={{ fontWeight: 'bold' }}>ID:</span>
             <input
@@ -631,20 +846,14 @@ export default function App() {
                 )}
               </div>
             </div>
-            {state.status === 'playing' && mySide !== 0 && (
-              <div style={{ marginBottom: '12px', fontSize: '0.9rem', color: '#f59e0b' }}>
-                {t('room.leaveGameWarning')}
-              </div>
-            )}
-
-            <div style={{ marginBottom: '16px', color: '#e2e8f0', display: 'flex', justifyContent: 'center', gap: '24px' }}>
+            <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'center', gap: '24px' }}>
               {state.players.length === 0 ? (
                 <span style={{ color: '#64748b' }}>{t('room.noPlayers')}</span>
               ) : (
                 state.players.map((p, i) => (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <Shield size={16} color={p.side === 1 ? '#94a3b8' : '#f8fafc'} />
-                    <span style={{ fontWeight: state.currentTurn === p.side ? 'bold' : 'normal', color: state.currentTurn === p.side ? '#38bdf8' : 'inherit' }}>
+                  <div key={i} className={`player-label ${p.side === 1 ? 'black' : 'white'} ${state.currentTurn === p.side ? 'active' : ''}`}>
+                    <Shield size={16} />
+                    <span>
                       {p.side === 1 ? t('room.side.blackShort') : t('room.side.whiteShort')}: {p.name} {p.actorType !== 'human' && <Bot size={14} style={{ display: 'inline', marginLeft: 4 }} />}
                     </span>
                   </div>
@@ -652,16 +861,15 @@ export default function App() {
               )}
             </div>
 
-            {state.status === 'finished' && (
-              <div style={{
-                margin: '16px 0', padding: '16px',
-                background: '#fef2f2',
-                border: '4px solid #f43f5e',
-                borderRadius: '12px',
-                boxShadow: '4px 4px 0 #fda4af',
-                textAlign: 'center',
-                color: '#e11d48', fontWeight: 'bold',
-              }}>
+            {state.status === 'finished' && !dismissedBanner && (
+              <div className="finish-banner">
+                <button
+                  className="close-banner-btn"
+                  onClick={() => setDismissedBanner(true)}
+                  aria-label="Close"
+                >
+                  <X size={16} />
+                </button>
                 {state.winner === 0 ? t('room.draw') : state.winner === 1 ? t('room.winner.black') : t('room.winner.white')}
                 {state.finishReason && <span style={{ fontSize: '0.85em', fontWeight: 'normal', display: 'block', marginTop: 4, color: '#94a3b8' }}>{t('room.reason')}: {finishReasonLabel(state.finishReason)}</span>}
               </div>
@@ -723,6 +931,24 @@ export default function App() {
 
   return (
     <>
+      {joinPromptRoomId && (
+        <div className="modal-overlay">
+          <div className="modal-card panel">
+            <h3 style={{ marginBottom: '10px' }}>{t('messages.promptJoinWaitingRoomTitle')}</h3>
+            <p style={{ marginTop: 0, marginBottom: '12px', color: '#475569' }}>{t('messages.promptJoinWaitingRoom')}</p>
+            <input
+              value={joinPromptName}
+              onChange={(e) => setJoinPromptName(e.target.value)}
+              placeholder={t('home.joinNamePlaceholder')}
+              style={{ width: '100%' }}
+            />
+            <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button className="secondary" onClick={closeJoinPrompt}>{t('common.cancel')}</button>
+              <button onClick={confirmJoinPrompt}><Users size={16} /> {t('home.joinRoom')}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="top-actions">
         <button className="icon-btn" onClick={toggleTheme} title={theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}>
           {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}

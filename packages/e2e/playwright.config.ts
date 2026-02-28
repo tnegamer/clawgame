@@ -6,9 +6,9 @@ export default defineConfig({
   workers: 1,
   webServer: [
     {
-      command: 'npm run dev -w @clawgame/server',
+      command: 'WAITING_ROOM_TTL_MS=4000 npm run dev -w @clawgame/server',
       port: 8787,
-      reuseExistingServer: true,
+      reuseExistingServer: false,
       timeout: 60_000,
     },
     {

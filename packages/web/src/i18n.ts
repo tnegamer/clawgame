@@ -11,6 +11,7 @@ const resources = {
       common: {
         copyPrompt: '复制提示词',
         copied: '已复制',
+        cancel: '取消',
       },
       defaults: {
         humanPlayer: '人类玩家',
@@ -22,7 +23,6 @@ const resources = {
         currentPlayers: '当前玩家数',
         activeRoomsAndWaiting: '活跃房间 {{activeRooms}} · 待匹配 {{waitingRooms}}',
         copyPromptForAgent: '复制这段给 Agent 阅读并加入游戏',
-        homePromptTip: '这段提示词没有房间号时，Agent 会加入匹配；如果提供房间号，Agent 会按房间号加入。',
         myNamePlaceholder: '我的昵称',
         createRoom: '创建房间',
         orJoinRoom: '或者 加入已有房间',
@@ -37,6 +37,10 @@ const resources = {
         joining: '加入中...',
         joinFailed: '加入失败',
         rejoinedGame: '已恢复你上次的对局，可继续游戏',
+        roomClosedByOwner: '房主已离开，房间已关闭',
+        noActiveBattle: '当前房间无人对战，已返回首页',
+        promptJoinWaitingRoomTitle: '加入房间',
+        promptJoinWaitingRoom: '该房间正在等待对手，是否加入游戏？',
         matchmakingJoining: '匹配中...',
         matchmakingWaiting: '已加入匹配，等待对手...',
         matchmakingTimeout: '匹配超时，请重试',
@@ -44,7 +48,7 @@ const resources = {
         websocketParseFailed: 'WebSocket 消息解析失败',
       },
       prompts: {
-        home: 'Read http://127.0.0.1:8787/skill.md. If no room id is provided, join matchmaking. If a room id is provided, join that room id.',
+        home: 'Read http://127.0.0.1:8787/skill.md.',
         room: 'Read {{skillUrl}}, then join room {{roomId}}.',
       },
       room: {
@@ -52,7 +56,6 @@ const resources = {
         roomIdBadge: 'ID: {{roomId}}',
         backHome: '返回首页',
         waitingOpponentAndSendPrompt: '等待对手加入... 请将以下提示词发送给 Agent',
-        leaveGameWarning: '离开页面后请尽快重新进入继续游戏，否则超时将判负。',
         status: {
           playing: '进行中',
           finished: '已结束',
@@ -92,6 +95,7 @@ const resources = {
       common: {
         copyPrompt: 'Copy Prompt',
         copied: 'Copied',
+        cancel: 'Cancel',
       },
       defaults: {
         humanPlayer: 'Human Player',
@@ -103,7 +107,6 @@ const resources = {
         currentPlayers: 'Current Players',
         activeRoomsAndWaiting: 'Active rooms {{activeRooms}} · Waiting {{waitingRooms}}',
         copyPromptForAgent: 'Copy this prompt for Agent to read and join',
-        homePromptTip: 'If no room id is provided, Agent should join matchmaking. If a room id is provided, Agent should join that room.',
         myNamePlaceholder: 'Your name',
         createRoom: 'Create Room',
         orJoinRoom: 'Or Join Existing Room',
@@ -118,6 +121,10 @@ const resources = {
         joining: 'Joining...',
         joinFailed: 'Join failed',
         rejoinedGame: 'Restored your previous game session',
+        roomClosedByOwner: 'Room owner left, room has been closed',
+        noActiveBattle: 'No active battle in this room. Returned to home.',
+        promptJoinWaitingRoomTitle: 'Join Room',
+        promptJoinWaitingRoom: 'This room is waiting for an opponent. Join now?',
         matchmakingJoining: 'Matching...',
         matchmakingWaiting: 'Joined matchmaking, waiting for opponent...',
         matchmakingTimeout: 'Matchmaking timeout, please retry',
@@ -125,7 +132,7 @@ const resources = {
         websocketParseFailed: 'Failed to parse WebSocket message',
       },
       prompts: {
-        home: 'Read http://127.0.0.1:8787/skill.md. If no room id is provided, join matchmaking. If a room id is provided, join that room id.',
+        home: 'Read http://127.0.0.1:8787/skill.md.',
         room: 'Read {{skillUrl}}, then join room {{roomId}}.',
       },
       room: {
@@ -133,7 +140,6 @@ const resources = {
         roomIdBadge: 'ID: {{roomId}}',
         backHome: 'Back to Home',
         waitingOpponentAndSendPrompt: 'Waiting for opponent... Send this prompt to an Agent',
-        leaveGameWarning: 'If you leave, rejoin quickly to continue, or you may lose by timeout.',
         status: {
           playing: 'Playing',
           finished: 'Finished',
