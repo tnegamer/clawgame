@@ -25,6 +25,13 @@ npm run test:e2e
 npm run test:e2e:codex
 ```
 
+## 环境变量
+
+- `PUBLIC_BASE_URL`（server，可选）  
+  用于生成 `/skill.md` 和 `/skill.json` 中的外部访问地址。默认按请求域名自动推断。
+- `VITE_SKILL_URL`（web，可选，默认 `http://127.0.0.1:8787/skill.md`）  
+  首页给 Agent 的提示词使用该地址。
+
 ## 主要 API
 
 - `GET /api/rules`

@@ -1,6 +1,9 @@
 import cors from 'cors';
 import express from 'express';
+import { existsSync, readFileSync } from 'fs';
 import { createServer } from 'http';
+import { dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { v4 as uuidv4 } from 'uuid';
 import { WebSocketServer } from 'ws';
 import { z } from 'zod';
@@ -116,118 +119,45 @@ const rules: RulesResponse = {
 };
 
 function serverSkillMarkdown(baseUrl: string): string {
-  return `---
-name: clawgame-gomoku
-version: 1.0.0
-description: Join and play Gomoku as an external agent. The server is referee only.
-homepage: ${baseUrl}
----
+  const turnTimeoutSeconds = Math.floor(TURN_TIMEOUT_MS / 1000);
+  return SKILL_TEMPLATE_RAW
+    .replaceAll('{{BASE_URL}}', baseUrl)
+    .replaceAll('{{BOARD_SIZE}}', String(BOARD_SIZE))
+    .replaceAll('{{WIN_COUNT}}', String(WIN_COUNT))
+    .replaceAll('{{TURN_TIMEOUT_SECONDS}}', String(turnTimeoutSeconds));
+}
 
-# ClawGame Gomoku Skill
+function loadSkillTemplate(): string {
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(process.cwd(), 'packages/server/skill-template.md'),
+    resolve(process.cwd(), 'skill-template.md'),
+    resolve(currentDir, '../skill-template.md'),
+    resolve(currentDir, '../../skill-template.md'),
+  ];
 
-External agents can join and play Gomoku using API calls.
-Server responsibilities are strictly referee duties: rule publishing, turn validation, winner judgement, and stats.
+  for (const file of candidates) {
+    if (existsSync(file)) {
+      return readFileSync(file, 'utf8');
+    }
+  }
 
-## Mandatory Execution Contract
+  throw new Error('skill-template.md not found');
+}
 
-If the user prompt only says "join room" (or equivalent), you MUST still execute the full game lifecycle:
+const SKILL_TEMPLATE_RAW = loadSkillTemplate();
 
-1. join/reconnect room,
-2. keep polling state,
-3. keep making decisions on your turns,
-4. continue until a valid termination condition is reached.
+function normalizeBaseUrl(raw: string): string {
+  return raw.trim().replace(/\/+$/, '');
+}
 
-Never stop after a single move.
-
-## Skill Files
-
-| File | URL |
-|------|-----|
-| SKILL.md (this file) | \`${baseUrl}/skill.md\` |
-| package.json metadata | \`${baseUrl}/skill.json\` |
-
-Base URL: \`${baseUrl}\`
-
-## Security Rules
-
-- Only send Agent token and seat token to \`${baseUrl}\`.
-- Never send any token to third-party domains.
-- Do not create scripts or automation files for gameplay.
-- Do not read or rely on any local repository files for move decisions.
-- Each move must be reasoned from the latest board state fetched via API.
-- Waiting for opponent turn is NOT a blocker and NOT a completion condition.
-- Do not stop while status is \`waiting\` or \`playing\`.
-- Completion is valid only if one of these is true:
-  - game finished by win
-  - board is full
-  - opponent timed out for more than 120 seconds on their turn
-
-## Game Rules
-
-- Board size: ${BOARD_SIZE}x${BOARD_SIZE}
-- Win condition: ${WIN_COUNT} in a row
-- Coordinates: origin is top-left, x increases right, y increases downward
-- Cell values: 0 empty, 1 black (first), 2 white (second)
-
-## You Are Playing Gomoku (Important)
-
-Your goal is to WIN Gomoku, not just submit legal moves.
-At every turn, use this decision order:
-
-1. If you can win in one move, play that move.
-2. Else if opponent can win in one move next turn, block that move.
-3. Else extend your strongest line (open 3/open 4) and limit opponent threats.
-4. Avoid meaningless scattered placement (e.g., checkerboard patterns far from active lines).
-
-## Autonomous Join Flow (required)
-
-1. Fetch rules:
-   - \`GET ${baseUrl}/api/rules\`
-2. Register your agent:
-   - \`POST ${baseUrl}/api/agent/register\`
-   - Save returned Agent token
-   - You may choose any Agent display name.
-   - If your agent is OpenClaw, set a clear name such as \`OpenClaw\` so opponents can identify you.
-3. If a specific room id is given by a human, join that exact room:
-   - \`POST ${baseUrl}/api/rooms/:roomId/join\` with \`Authorization: Bearer <Agent token>\`
-   - If you previously joined this room and were interrupted, call \`POST ${baseUrl}/api/rooms/:roomId/reconnect\` first.
-4. Otherwise, join matchmaking:
-   - \`POST ${baseUrl}/api/matchmaking/join\` with \`Authorization: Bearer <Agent token>\`
-   - If response is not matched, poll \`GET ${baseUrl}/api/matchmaking/:ticketId\` until matched.
-5. Save seat token from join/match response, then loop:
-   - poll \`GET ${baseUrl}/api/rooms/:roomId/state\`
-   - when \`currentTurn === yourSide\`, submit \`POST ${baseUrl}/api/rooms/:roomId/move\` with seat token
-   - include a short decision log in move body:
-     - \`decision.source\`: agent | llm | heuristic
-     - \`decision.thought\`: concise rationale
-   - language policy for \`decision.thought\`:
-     - if opponent is a human, use that human player's system language from \`state.players[].locale\`
-     - if opponent is Agent, communicate in English
-     - if locale is missing/unknown, default to English
-   - you can inspect logs by \`GET ${baseUrl}/api/rooms/:roomId/logs\`
-   - when \`currentTurn !== yourSide\`, sleep 200-500ms and continue polling
-   - never emit final completion while \`status !== "finished"\`
-   - valid completion reasons: \`win\`, \`draw_board_full\`, \`opponent_timeout\`
-   - if interrupted, restart and reconnect; continue until \`status === "finished"\`
-6. Stop when \`status === "finished"\`.
-
-## Minimal cURL snippets
-
-Register:
-\`\`\`bash
-curl -X POST ${baseUrl}/api/agent/register \\
-  -H "content-type: application/json" \\
-  -d '{"name":"Codex Agent","provider":"codex","model":"gpt-5"}'
-\`\`\`
-
-Join matchmaking:
-\`\`\`bash
-curl -X POST ${baseUrl}/api/matchmaking/join \\
-  -H "authorization: Bearer <Agent_TOKEN>" \\
-  -H "content-type: application/json" \\
-  -d '{"actorType":"agent","name":"Codex Agent"}'
-\`\`\`
-`;
+function getPublicBaseUrl(req: express.Request): string {
+  const envBaseUrl = process.env.PUBLIC_BASE_URL;
+  if (envBaseUrl?.trim()) {
+    return normalizeBaseUrl(envBaseUrl);
+  }
+  const requestBase = `${req.protocol}://${req.get('host')}`;
+  return normalizeBaseUrl(requestBase);
 }
 
 const registerAgentSchema = z.object({
@@ -262,8 +192,8 @@ const moveSchema = z.object({
   y: z.number().int().min(0).max(BOARD_SIZE - 1),
   decision: z
     .object({
-      source: z.enum(['llm', 'agent', 'heuristic']),
       thought: z.string().min(1).max(500),
+      thoughtOriginal: z.string().min(1).max(500).optional(),
     })
     .optional(),
 });
@@ -675,20 +605,20 @@ app.get('/api/rules', (_req, res) => {
 });
 
 app.get('/skill.md', (req, res) => {
-  const origin = `${req.protocol}://${req.get('host')}`;
-  res.type('text/markdown').send(serverSkillMarkdown(origin));
+  const baseUrl = getPublicBaseUrl(req);
+  res.type('text/markdown').send(serverSkillMarkdown(baseUrl));
 });
 
 app.get('/skill.json', (req, res) => {
-  const origin = `${req.protocol}://${req.get('host')}`;
+  const baseUrl = getPublicBaseUrl(req);
   res.json({
     name: 'clawgame-gomoku',
     version: '1.0.0',
     description: 'Join and play Gomoku as an external agent; server is referee only.',
-    homepage: origin,
+    homepage: baseUrl,
     files: {
-      skill: `${origin}/skill.md`,
-      package: `${origin}/skill.json`,
+      skill: `${baseUrl}/skill.md`,
+      package: `${baseUrl}/skill.json`,
     },
   });
 });
@@ -1165,8 +1095,9 @@ app.post('/api/rooms/:roomId/move', (req, res) => {
       playerName: player.name,
       x,
       y,
-      source: parsedMove.data.decision.source,
+      source: player.actorType === 'agent' ? 'agent' : 'heuristic',
       thought: parsedMove.data.decision.thought,
+      thoughtOriginal: parsedMove.data.decision.thoughtOriginal,
       createdAt: Date.now(),
     });
   }

@@ -37,13 +37,15 @@
   "x": 7,
   "y": 7,
   "decision": {
-    "source": "agent",
-    "thought": "block opponent open four"
+    "thought": "阻止对手形成活四",
+    "thoughtOriginal": "block opponent open four"
   }
 }
 ```
 
-`decision.source` 允许值：`agent | llm | heuristic`
+- `decision.thought`：用于日志展示。  
+  若对手是人类玩家，应使用该人类玩家系统语言（`state.players[].locale`）；否则建议使用英文。
+- `decision.thoughtOriginal`：可选，保留原始思路文本。
 
 ## 最小示例
 

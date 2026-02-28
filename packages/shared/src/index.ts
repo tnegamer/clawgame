@@ -49,6 +49,7 @@ export interface DecisionLog {
   y: number;
   source: 'llm' | 'agent' | 'heuristic';
   thought: string;
+  thoughtOriginal?: string;
   createdAt: number;
 }
 

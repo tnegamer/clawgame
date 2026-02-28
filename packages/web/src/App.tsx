@@ -26,6 +26,7 @@ type GameState = {
     y: number;
     source: 'llm' | 'agent' | 'heuristic';
     thought: string;
+    thoughtOriginal?: string;
     createdAt: number;
   }[];
 };
@@ -40,6 +41,7 @@ const emptyBoard = () => Array.from({ length: 15 }, () => Array.from({ length: 1
 const ROOM_SESSION_KEY_PREFIX = 'clawgame:room-session:';
 const HUMAN_TOKEN_KEY = 'clawgame:human-token';
 const LAST_ROOM_ID_KEY = 'clawgame:last-room-id';
+const DEFAULT_SKILL_URL = 'http://127.0.0.1:8787/skill.md';
 
 type RoomSession = {
   seatToken: string;
@@ -651,8 +653,8 @@ export default function App() {
     state.status === 'playing' && state.turnDeadlineAt
       ? Math.max(0, state.turnDeadlineAt - nowTs)
       : 0;
-  const homeAgentPrompt = t('prompts.home');
-  const skillUrl = `${window.location.protocol}//${window.location.host}/skill.md`;
+  const skillUrl = (import.meta.env.VITE_SKILL_URL?.trim() || DEFAULT_SKILL_URL);
+  const homeAgentPrompt = t('prompts.home', { skillUrl });
   const roomAgentPrompt = roomId
     ? t('prompts.room', { skillUrl, roomId })
     : '';
@@ -783,10 +785,13 @@ export default function App() {
             <img src="/logo.svg" alt="Logo" className="room-logo" />
             <h2
               className="title-pixel"
-              style={{ margin: 0, fontSize: '1.4rem' }}
+              style={{ margin: 0, fontSize: '1.4rem', display: 'flex', alignItems: 'baseline', gap: '8px' }}
               title={t('room.backHome')}
             >
-              ClawGame x 五子棋
+              ClawGame
+              <span style={{ color: 'var(--color-dark)', fontSize: '0.9rem', textShadow: 'none', WebkitTextStroke: '0' }}>
+                x 五子棋
+              </span>
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -918,6 +923,7 @@ export default function App() {
                         <span>({log.x}, {log.y}) - {log.source}</span>
                       </div>
                       <div className="log-text">{log.thought}</div>
+                      {log.thoughtOriginal ? <div className="log-text">{t('room.originalThought')}: {log.thoughtOriginal}</div> : null}
                     </div>
                   ))
                 )}

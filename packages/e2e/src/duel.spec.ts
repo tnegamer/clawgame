@@ -142,6 +142,58 @@ test('agent matchmaking can auto-join an existing waiting room', async ({ reques
   expect((mmJoined.state.players as Array<unknown>).length).toBe(2);
 });
 
+test('agent move with decision should produce decision log', async ({ request }) => {
+  const createRes = await request.post('http://127.0.0.1:8787/api/rooms', {
+    data: { actorType: 'human', name: `host-log-${Date.now()}` },
+  });
+  expect(createRes.ok()).toBeTruthy();
+  const created = await createRes.json();
+
+  const registerRes = await request.post('http://127.0.0.1:8787/api/agent/register', {
+    data: { name: `agent-log-${Date.now()}`, provider: 'codex', model: 'gpt-5' },
+  });
+  expect(registerRes.ok()).toBeTruthy();
+  const registered = await registerRes.json();
+
+  const joinRes = await request.post(`http://127.0.0.1:8787/api/rooms/${created.roomId}/join`, {
+    headers: { authorization: `Bearer ${registered.token}` },
+    data: { actorType: 'agent', name: registered.profile.name },
+  });
+  expect(joinRes.status()).toBe(201);
+  const joined = await joinRes.json();
+
+  const hostMoveRes = await request.post(`http://127.0.0.1:8787/api/rooms/${created.roomId}/move`, {
+    headers: { authorization: `Bearer ${created.seatToken}` },
+    data: { x: 7, y: 7 },
+  });
+  expect(hostMoveRes.ok()).toBeTruthy();
+
+  const agentMoveRes = await request.post(`http://127.0.0.1:8787/api/rooms/${created.roomId}/move`, {
+    headers: { authorization: `Bearer ${joined.seatToken}` },
+    data: { x: 8, y: 7, decision: { thought: '阻止中路连线', thoughtOriginal: 'block center line' } },
+  });
+  expect(agentMoveRes.ok()).toBeTruthy();
+
+  const logsRes = await request.get(`http://127.0.0.1:8787/api/rooms/${created.roomId}/logs`);
+  expect(logsRes.ok()).toBeTruthy();
+  const logsPayload = await logsRes.json();
+  const logs = logsPayload.logs as Array<{
+    source: string;
+    thought: string;
+    thoughtOriginal?: string;
+    playerName: string;
+    x: number;
+    y: number;
+  }>;
+  expect(logs.length).toBe(1);
+  expect(logs[0].playerName).toBe(registered.profile.name);
+  expect(logs[0].source).toBe('agent');
+  expect(logs[0].thought).toBe('阻止中路连线');
+  expect(logs[0].thoughtOriginal).toBe('block center line');
+  expect(logs[0].x).toBe(8);
+  expect(logs[0].y).toBe(7);
+});
+
 test('agents should be paired by matchmaking when no waiting room exists', async ({ request }) => {
   const leftRegisterRes = await request.post('http://127.0.0.1:8787/api/agent/register', {
     data: { name: `agent-left-${Date.now()}`, provider: 'codex', model: 'gpt-5' },

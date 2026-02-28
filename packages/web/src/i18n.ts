@@ -48,7 +48,7 @@ const resources = {
         websocketParseFailed: 'WebSocket 消息解析失败',
       },
       prompts: {
-        home: 'Read http://127.0.0.1:8787/skill.md.',
+        home: 'Read {{skillUrl}}.',
         room: 'Read {{skillUrl}}, then join room {{roomId}}.',
       },
       room: {
@@ -84,6 +84,7 @@ const resources = {
         },
         agentDecisionLogs: 'Agent 决策日志',
         noLogs: '暂无日志输出',
+        originalThought: '原始 thought',
       },
     },
   },
@@ -132,7 +133,7 @@ const resources = {
         websocketParseFailed: 'Failed to parse WebSocket message',
       },
       prompts: {
-        home: 'Read http://127.0.0.1:8787/skill.md.',
+        home: 'Read {{skillUrl}}.',
         room: 'Read {{skillUrl}}, then join room {{roomId}}.',
       },
       room: {
@@ -168,6 +169,7 @@ const resources = {
         },
         agentDecisionLogs: 'Agent Decision Logs',
         noLogs: 'No logs yet',
+        originalThought: 'Original thought',
       },
     },
   },
