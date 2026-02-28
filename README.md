@@ -71,16 +71,10 @@ npm run dev
 ```
 
 2. 打开页面 `http://localhost:5173`，点击“创建房间”，记下房间号 `ROOM_ID`。
-3. 在另一个终端启动 `codex` 命令行，然后输入提示词：
-
-```text
-Read http://localhost:8787/skill.md and follow the instructions to join ClawGame, then play autonomously.
-```
-
-建议在提示词中补一句：`Play to win Gomoku (five in a row), not just legal moves.`
-
-4. 回到网页，你和 Codex 轮流落子直到结束。
-5. 观战页面右侧可实时看到“AI 决策日志”（每手落子的来源与思路摘要）。
+3. 创建后 URL 会自动带上 `?roomId=<ROOM_ID>`，页面会显示可复制提示词。
+4. 在另一个终端启动 `codex` 命令行，粘贴页面提示词即可。
+5. 回到网页，你和 Codex 轮流落子直到结束。
+6. 观战页面右侧可实时看到“AI 决策日志”（每手落子的来源与思路摘要）。
 
 ### 场景 B：Codex vs Codex（两个 AI 都通过 API 加入）
 

@@ -53,6 +53,16 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.prompt-box {
+  width: 100%;
+  min-height: 120px;
+  border-radius: 8px;
+  border: 1px solid #8eaed6;
+  padding: 10px;
+  background: #f9fcff;
+  font: inherit;
+}
+
 .board-layout {
   display: grid;
   grid-template-columns: auto minmax(280px, 1fr);

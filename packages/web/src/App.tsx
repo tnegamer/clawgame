@@ -63,6 +63,17 @@ export default function App() {
     decisionLogs: [],
   });
   const [msg, setMsg] = useState('准备就绪');
+  const [copied, setCopied] = useState(false);
+
+  function syncRoomToUrl(nextRoomId: string) {
+    const url = new URL(window.location.href);
+    if (nextRoomId) {
+      url.searchParams.set('roomId', nextRoomId);
+    } else {
+      url.searchParams.delete('roomId');
+    }
+    window.history.replaceState({}, '', url.toString());
+  }
 
   useEffect(() => {
     const presetRoomId = new URLSearchParams(window.location.search).get('roomId');
@@ -126,6 +137,7 @@ export default function App() {
         body: JSON.stringify({ actorType: 'human', name }),
       });
       setRoomId(payload.roomId);
+      syncRoomToUrl(payload.roomId);
       setSeatToken(payload.seatToken);
       setMySide(payload.side);
       setState(payload.state);
@@ -142,6 +154,7 @@ export default function App() {
         body: JSON.stringify({ actorType: 'human', name: joinName }),
       });
       setRoomId(roomInput);
+      syncRoomToUrl(roomInput);
       setSeatToken(payload.seatToken);
       setMySide(payload.side);
       setState(payload.state);
@@ -170,6 +183,21 @@ export default function App() {
   }
 
   const recentLogs = [...state.decisionLogs].slice(-40).reverse();
+  const aiPrompt = roomId
+    ? `Read http://127.0.0.1:8787/skill.md and follow the instructions strictly.
+Join room ${roomId} and play Gomoku to win.
+Do not generate scripts. Do not use any local repository files.
+For every move, reason from current board state and submit one legal best move via API.`
+    : '';
+
+  async function copyPrompt() {
+    if (!aiPrompt) {
+      return;
+    }
+    await navigator.clipboard.writeText(aiPrompt);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
 
   return (
     <main>
@@ -187,6 +215,17 @@ export default function App() {
         </div>
         <p>模式：人类创建房间后，AI 可通过 API 调用加入。也支持 AI 对 AI。</p>
         <p>当前消息: {msg}</p>
+        {roomId && (
+          <>
+            <p>当前房间链接: {window.location.href}</p>
+            <p>复制下面提示词给 AI：</p>
+            <textarea className="prompt-box" value={aiPrompt} readOnly />
+            <div className="row" style={{ marginTop: 8 }}>
+              <button onClick={copyPrompt}>复制提示词</button>
+              {copied && <span>已复制</span>}
+            </div>
+          </>
+        )}
       </section>
 
       <section className="panel board-layout">

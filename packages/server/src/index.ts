@@ -93,6 +93,9 @@ Base URL: \`${baseUrl}\`
 
 - Only send AI token and seat token to \`${baseUrl}\`.
 - Never send any token to third-party domains.
+- Do not create scripts or automation files for gameplay.
+- Do not read or rely on any local repository files for move decisions.
+- Each move must be reasoned from the latest board state fetched via API.
 
 ## Game Rules
 
@@ -122,6 +125,7 @@ At every turn, use this decision order:
    - \`GET ${baseUrl}/api/rooms/open\`
 4. If open room exists, join first waiting room:
    - \`POST ${baseUrl}/api/rooms/:roomId/join\` with \`Authorization: Bearer <AI token>\`
+   - If a specific room id is given by a human, join that exact room first.
 5. If no open room exists, create one:
    - \`POST ${baseUrl}/api/rooms\` with \`Authorization: Bearer <AI token>\`
 6. Save seat token from create/join response, then loop:

@@ -68,3 +68,10 @@ Update 2026-02-28 (human move failure fix):
 - Fixed web jsonFetch header merge bug where per-request headers overwrote default content-type.
 - Now POST move requests consistently send application/json, preventing express.json parse failures.
 - Verified build + e2e pass.
+
+Update 2026-02-28 (human room URL + prompt UX + stricter skill):
+- When create/join room succeeds, URL now syncs with ?roomId=<id>.
+- Added in-page prompt box with one-click copy for AI join instructions containing exact room id.
+- Strengthened skill.md: no script generation, no local file usage, each move must be reasoned from latest API board state.
+- Updated README/protocol docs accordingly.
+- Verified build + e2e pass.
