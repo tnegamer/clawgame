@@ -901,6 +901,15 @@ export class LobbyDO {
       return { status: 409, body: { error: 'not your turn' } };
     }
 
+    const player = room.players.find((p) => p.side === seat.side);
+    if (!player) {
+      return { status: 404, body: { error: 'seat player not found' } };
+    }
+
+    if (player.actorType === 'agent' && !move.decision) {
+      return { status: 400, body: { error: 'decision is required for agent move' } };
+    }
+
     const { x, y } = move;
     if (room.board[y][x] !== 0) {
       return { status: 409, body: { error: 'cell already occupied' } };
@@ -910,7 +919,6 @@ export class LobbyDO {
     room.lastActiveAt[seat.side] = Date.now();
     room.moves += 1;
     room.lastMove = { x, y, side: seat.side };
-    const player = room.players.find((p) => p.side === seat.side);
     if (move.decision && player) {
       room.decisionLogs.push({
         moveNo: room.moves,
@@ -1246,6 +1254,11 @@ export class LobbyDO {
 
       const existing = this.findActiveSeatByActorId(actorId);
       if (existing) {
+        if (parsed.data.actorType === 'human' && parsed.data.locale && existing.seat.locale !== parsed.data.locale) {
+          existing.seat.locale = parsed.data.locale;
+          await this.persistRuntimeState();
+          this.broadcastRoom(existing.room.id, { type: 'state', state: this.roomToState(existing.room) });
+        }
         return json({
           roomId: existing.room.id,
           seatToken: existing.seat.seatToken,
@@ -1293,6 +1306,11 @@ export class LobbyDO {
 
       const existingSeat = this.findActiveSeatByActorId(actorId);
       if (existingSeat) {
+        if (parsed.data.actorType === 'human' && parsed.data.locale && existingSeat.seat.locale !== parsed.data.locale) {
+          existingSeat.seat.locale = parsed.data.locale;
+          await this.persistRuntimeState();
+          this.broadcastRoom(existingSeat.room.id, { type: 'state', state: this.roomToState(existingSeat.room) });
+        }
         return json({
           matched: existingSeat.room.status === 'playing',
           ticketId,
@@ -1306,6 +1324,12 @@ export class LobbyDO {
 
       const existingTicketId = this.findWaitingTicketByActorId(actorId);
       if (existingTicketId) {
+        const waiting = this.waitingByTicket.get(existingTicketId);
+        if (waiting && parsed.data.actorType === 'human') {
+          waiting.locale = parsed.data.locale;
+          waiting.name = parsed.data.name;
+          await this.persistRuntimeState();
+        }
         return json({ matched: false, ticketId: existingTicketId, reused: true }, 202);
       }
 
@@ -1398,6 +1422,11 @@ export class LobbyDO {
 
       const existingSeat = room.players.find((p) => p.actorType === parsed.data.actorType && p.actorId === actorId);
       if (existingSeat) {
+        if (parsed.data.actorType === 'human' && parsed.data.locale && existingSeat.locale !== parsed.data.locale) {
+          existingSeat.locale = parsed.data.locale;
+          await this.persistRuntimeState();
+          this.broadcastRoom(room.id, { type: 'state', state: this.roomToState(room) });
+        }
         return json({
           seatToken: existingSeat.seatToken,
           side: existingSeat.side,

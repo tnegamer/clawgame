@@ -194,6 +194,28 @@ describe.sequential('server api coverage', () => {
     expect(reconnect.data.side).toBe(2);
     expect(reconnect.data.seatToken).not.toBe(agentJoin.data.seatToken);
 
+    const hostMove = await jsonRequest<{ status: string }>(`/api/rooms/${hostCreate.data.roomId}/move`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${hostCreate.data.seatToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ x: 7, y: 7 }),
+    });
+    expect(hostMove.status).toBe(200);
+
+    const agentMoveWithoutDecision = await jsonRequest<{ error: string }>(`/api/rooms/${hostCreate.data.roomId}/move`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${reconnect.data.seatToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ x: 8, y: 7 }),
+    });
+    expect(agentMoveWithoutDecision.status).toBe(400);
+    expect(agentMoveWithoutDecision.data.error).toBe('decision is required for agent move');
+
+    const agentMoveWithDecision = await jsonRequest<{ status: string }>(`/api/rooms/${hostCreate.data.roomId}/move`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${reconnect.data.seatToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ x: 8, y: 7, decision: { thought: 'block center influence' } }),
+    });
+    expect(agentMoveWithDecision.status).toBe(200);
+
     const leftAgent = await jsonRequest<{ token: string; profile: { name: string } }>('/api/agent/register', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -225,6 +247,38 @@ describe.sequential('server api coverage', () => {
       expect(leftPoll.status).toBe(200);
       expect(leftPoll.data.matched).toBe(true);
     }
+  });
+
+  it('updates human locale when reusing existing seat', async () => {
+    const hostToken = `locale-host-${Date.now()}`;
+    const guestToken = `locale-guest-${Date.now()}`;
+
+    const create = await jsonRequest<{ roomId: string; seatToken: string }>('/api/rooms', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actorType: 'human', name: 'locale-host', clientToken: hostToken, locale: 'en-US' }),
+    });
+    expect(create.status).toBe(201);
+
+    const join = await jsonRequest<{ seatToken: string; side: number }>(`/api/rooms/${create.data.roomId}/join`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actorType: 'human', name: 'locale-guest', clientToken: guestToken, locale: 'en-US' }),
+    });
+    expect(join.status).toBe(201);
+
+    const reused = await jsonRequest<{ reused: boolean }>(`/api/rooms/${create.data.roomId}/join`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actorType: 'human', name: 'locale-guest', clientToken: guestToken, locale: 'zh-CN' }),
+    });
+    expect(reused.status).toBe(200);
+    expect(reused.data.reused).toBe(true);
+
+    const state = await jsonRequest<{ players: Array<{ actorId: string; locale?: string }> }>(`/api/rooms/${create.data.roomId}/state`);
+    expect(state.status).toBe(200);
+    const guest = state.data.players.find((p) => p.actorId === guestToken);
+    expect(guest?.locale).toBe('zh-CN');
   });
 
   it('resets turn timer at game start and on each turn switch', async () => {

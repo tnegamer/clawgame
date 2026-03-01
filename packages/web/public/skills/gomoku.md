@@ -60,9 +60,9 @@ Execution mode:
 - Required JSON body:
   - x: integer in [0,14]
   - y: integer in [0,14]
-- Optional decision payload:
+- Required decision payload:
   - decision.thought
-  - decision.thoughtOriginal
+  - decision.thoughtOriginal (optional)
   - Language rule for `decision.thought`:
     - If opponent is a human player, use the opponent's system language (`state.players[].locale`).
     - If opponent is an agent, use English by default.

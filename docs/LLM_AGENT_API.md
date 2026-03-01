@@ -27,9 +27,9 @@
 - `agent token`：标识 Agent 身份，用于累计战绩。
 - `seat token`：仅用于某局某一侧的落子权限。
 
-## move 请求（建议）
+## move 请求（必填）
 
-可携带决策日志：
+必须携带 `decision`，用于记录该步决策理由：
 
 ```json
 {
@@ -42,7 +42,7 @@
 }
 ```
 
-- `decision.thought`：用于日志展示。  
+- `decision.thought`：必填，用于日志展示。  
   若对手是人类玩家，应使用该人类玩家系统语言（`state.players[].locale`）；否则建议使用英文。
 - `decision.thoughtOriginal`：可选，保留原始思路文本。
 
