@@ -1,0 +1,255 @@
+@media (max-width: 1024px) {
+  .game-container {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+
+  .log-panel {
+    height: 400px;
+  }
+}
+
+@media (max-width: 640px) {
+  :root {
+    font-size: 16px;
+  }
+
+  body {
+    padding: 8px;
+  }
+
+  #root {
+    padding: 12px;
+  }
+
+  .title {
+    font-size: 1.5rem;
+    margin: 0.2rem 0 0.5rem;
+  }
+
+  .title-pixel {
+    letter-spacing: 0px;
+  }
+
+  .panel {
+    padding: 10px;
+    margin-bottom: 10px;
+  }
+
+  /* Home Stats */
+  .home-stats {
+    padding: 8px;
+    font-size: 0.8rem;
+    gap: 6px;
+  }
+
+  .home-stats-value {
+    font-size: 1.3rem !important;
+  }
+
+  .home-stats-meta-row {
+    gap: 6px;
+  }
+
+  .home-stats-mini-btn {
+    font-size: 0.75rem;
+    padding: 3px 6px;
+  }
+
+  .home-tab {
+    padding: 6px 10px;
+    font-size: 0.85rem;
+  }
+
+  /* Board */
+  .board-surface {
+    --grid-step: 21px;
+    border-width: 3px;
+    margin: 0 auto;
+    box-shadow: 4px 4px 0 var(--color-dark);
+    box-sizing: border-box;
+    width: calc(var(--grid-step) * var(--board-points) + 6px);
+    height: calc(var(--grid-step) * var(--board-points) + 6px);
+  }
+
+  .hoshi-point {
+    width: 5px;
+    height: 5px;
+  }
+
+  .cell {
+    width: var(--grid-step);
+    height: var(--grid-step);
+  }
+
+  .stone {
+    width: 18px;
+    height: 18px;
+    border-width: 2px !important;
+  }
+
+  .board-wrapper {
+    padding: 12px 8px;
+    border-radius: 10px;
+    width: auto;
+    max-width: 100%;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .board-info {
+    font-size: 0.8rem;
+    margin-bottom: 12px;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 6px;
+    white-space: normal;
+  }
+
+  .last-move-indicator {
+    width: 6px;
+    height: 6px;
+    border-width: 2px;
+    transform: translate(-50%, -50%);
+  }
+
+  .status-badge {
+    padding: 2px 6px;
+    font-size: 0.7rem;
+    border-width: 2px;
+  }
+
+  /* Room Header & Room ID */
+  .room-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding-top: 0;
+    padding-bottom: 10px;
+    padding-right: 0;
+  }
+
+  .room-header>div:first-child {
+    padding-right: 90px;
+    /* Clear space for top-actions buttons only on title row */
+  }
+
+  .room-header .title-pixel {
+    font-size: 1.3rem !important;
+  }
+
+  .room-id-copy-btn {
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0;
+    box-sizing: border-box;
+    font-size: 0.8rem;
+    padding: 6px 10px;
+  }
+
+  .room-id-feedback {
+    font-size: 0.7rem;
+  }
+
+  .room-logo {
+    width: 26px;
+    height: 26px;
+  }
+
+  /* Board wrapper on mobile */
+  .board-wrapper {
+    padding: 16px 10px;
+    border-radius: 10px;
+    border-width: 3px;
+    box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.1);
+  }
+
+  /* Game Container */
+  .game-container {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .log-panel {
+    height: 300px;
+  }
+
+  .log-item {
+    font-size: 0.85rem;
+    padding: 8px;
+  }
+
+  .game-start-banner {
+    font-size: 1.8rem;
+  }
+
+  .finish-banner {
+    width: 85%;
+    font-size: 1rem;
+    padding: 14px 16px;
+  }
+
+  .modal-card {
+    width: 92%;
+    max-width: none;
+    padding: 14px;
+  }
+
+  .player-label {
+    font-size: 0.8rem !important;
+    gap: 4px !important;
+    padding: 2px 8px;
+  }
+
+  .player-label.active {
+    transform: scale(1.05);
+  }
+
+  /* Active Rooms Modal */
+  .active-room-item {
+    padding: 8px;
+    font-size: 0.85rem;
+  }
+
+  .active-room-id {
+    font-size: 0.75rem;
+  }
+
+  .active-room-meta {
+    font-size: 0.75rem;
+  }
+
+  /* Prompt panel */
+  .prompt-box {
+    font-size: 0.9rem;
+    min-height: 50px;
+  }
+
+  .footer {
+    margin: 16px 0 8px;
+  }
+
+  /* Top action buttons (theme/lang) */
+  .top-actions {
+    top: 8px;
+    right: 8px;
+    gap: 6px;
+  }
+
+  .icon-btn {
+    padding: 5px;
+    border-width: 2px;
+    border-radius: 6px;
+    box-shadow: 0 2px 0 var(--color-dark);
+  }
+
+  .icon-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+

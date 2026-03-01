@@ -7,6 +7,21 @@ import { expect, test } from '@playwright/test';
 const runRealAgentPrompt = process.env.RUN_REAL_AGENT_PROMPT === '1';
 const realAgentPromptTest = runRealAgentPrompt ? test : test.skip;
 
+async function ensureWebServerReachable(request: import('@playwright/test').APIRequestContext): Promise<boolean> {
+  for (let i = 0; i < 30; i += 1) {
+    try {
+      const res = await request.get('http://127.0.0.1:5173');
+      if (res.ok()) {
+        return true;
+      }
+    } catch {
+      // ignore and retry until timeout
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return false;
+}
+
 test('human can create room and Agent can join by room id', async ({ request }) => {
   const rightRes = await request.post('http://127.0.0.1:8787/api/agent/register', {
     data: { name: `claude-e2e-${Date.now()}`, provider: 'claude', model: 'sonnet' },
@@ -31,6 +46,10 @@ test('human can create room and Agent can join by room id', async ({ request }) 
   const bySide = new Map<number, string>();
   bySide.set(1, created.seatToken);
   bySide.set(2, joined.seatToken);
+  const sideActorType = new Map<number, 'human' | 'agent'>([
+    [1, 'human'],
+    [2, 'agent'],
+  ]);
 
   let done = false;
   for (let step = 0; step < 240; step += 1) {
@@ -59,9 +78,18 @@ test('human can create room and Agent can join by room id', async ({ request }) 
     const token = bySide.get(state.currentTurn);
     expect(token).toBeTruthy();
 
+    const movePayload = sideActorType.get(state.currentTurn) === 'agent'
+      ? {
+        ...action!,
+        decision: {
+          thought: 'Take first available cell',
+        },
+      }
+      : action!;
+
     const moveRes = await request.post(`http://127.0.0.1:8787/api/rooms/${created.roomId}/move`, {
       headers: { authorization: `Bearer ${token}` },
-      data: action!,
+      data: movePayload,
     });
     expect(moveRes.ok()).toBeTruthy();
   }
@@ -401,9 +429,7 @@ test('stale waiting room should be auto cleaned', async ({ request }) => {
 });
 
 test('direct room link should show join modal component and join with entered name', async ({ request, page }) => {
-  try {
-    await request.get('http://127.0.0.1:5173');
-  } catch {
+  if (!(await ensureWebServerReachable(request))) {
     test.skip(true, 'web dev server is not reachable on 5173 in this environment');
   }
 
@@ -432,9 +458,7 @@ test('direct room link should show join modal component and join with entered na
 });
 
 test('two real human players can enter game when B joins via room link', async ({ browser, request }) => {
-  try {
-    await request.get('http://127.0.0.1:5173');
-  } catch {
+  if (!(await ensureWebServerReachable(request))) {
     test.skip(true, 'web dev server is not reachable on 5173 in this environment');
   }
 
@@ -478,9 +502,7 @@ test('two real human players can enter game when B joins via room link', async (
 });
 
 test('two real human players can enter game when B joins via matchmaking button', async ({ browser, request }) => {
-  try {
-    await request.get('http://127.0.0.1:5173');
-  } catch {
+  if (!(await ensureWebServerReachable(request))) {
     test.skip(true, 'web dev server is not reachable on 5173 in this environment');
   }
 
@@ -526,9 +548,7 @@ test('two real human players can enter game when B joins via matchmaking button'
 });
 
 test('board should place stones on intersections', async ({ browser, request }) => {
-  try {
-    await request.get('http://127.0.0.1:5173');
-  } catch {
+  if (!(await ensureWebServerReachable(request))) {
     test.skip(true, 'web dev server is not reachable on 5173 in this environment');
   }
 
