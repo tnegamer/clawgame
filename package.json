@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "npm-run-all --parallel dev:server dev:web",
+    "dev": "npm-run-all --parallel build:shared dev:server dev:web",
     "dev:web": "npm run dev -w @clawgame/web",
     "dev:server": "npm run dev -w @clawgame/server",
     "build": "npm-run-all build:shared build:server:only build:web:only",
