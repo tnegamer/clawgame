@@ -48,3 +48,20 @@ Original prompt: web 端调用 live 和 move 改成通过 ws
   - Runtime room/matchmaking/seat state snapshot now persisted in Durable Object storage (`runtime:v1`) and restored on DO startup.
 - Added runtime state persistence calls to room/matchmaking/move/reconnect/leave/timeouts flows.
 - Verification: `npm run test:unit -w @clawgame/server` passed (6/6).
+
+## 2026-03-01 Session (duel UI jitter + desktop/mobile e2e)
+
+- Fixed board info jitter risk during duel by stabilizing the second info row layout.
+- `RoomView`: always renders the second info row container; non-playing state uses hidden placeholder to preserve layout height.
+- Countdown now uses fallback `--:--` when deadline is missing to avoid content disappearance.
+- CSS updates:
+  - `.board-info-live` uses fixed min-height and nowrap.
+  - `.board-countdown` uses right alignment with stable width behavior.
+  - mobile responsive rules force full-width live row with consistent spacing.
+- Added e2e test: `board info layout should stay stable during duel on desktop and mobile`.
+  - Two real human players join a room and play moves.
+  - Verifies `.board-info-live` visible in playing state.
+  - Verifies `.board-surface` Y position remains stable across countdown ticks and moves.
+- Verification:
+  - `npm run test -w @clawgame/e2e -- --config=playwright.local.config.ts --grep "two real human players can enter game when B joins via room link|board info layout should stay stable during duel on desktop and mobile"` passed (2/2).
+  - `npm run build:web:only` passed.

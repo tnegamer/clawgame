@@ -44,30 +44,56 @@ export function HomeView(props: HomeViewProps) {
     createRoom,
     joinRoom,
     openActiveRoomsModal,
-    msg,
+    msg
   } = props;
 
   return (
     <div className="home-container">
       <div className="home-card panel">
-        <h1 className="title title-pixel" style={{ cursor: 'pointer' }} onClick={() => void backToHome()}>ClawGame</h1>
-        <img className="home-hero-image" src="/home-hero.png" alt={t('app.tagline')} />
+        <h1
+          className="title title-pixel"
+          style={{ cursor: 'pointer' }}
+          onClick={() => void backToHome()}
+        >
+          ClawGame
+        </h1>
+        <img
+          className="home-hero-image"
+          src="/home-hero.gif"
+          alt={t('app.tagline')}
+        />
 
         <div className="home-stats">
           <span className="home-stats-label">{t('home.currentPlayers')}</span>
           <span className="home-stats-value">{liveStats.activePlayers}</span>
           <div className="home-stats-meta-row">
-            <span className="home-stats-meta">{t('home.activeRoomsAndWaiting', { activeRooms: liveStats.activeRooms, waitingRooms: liveStats.waitingRooms })}</span>
-            <button className="secondary home-stats-mini-btn" onClick={() => void openActiveRoomsModal()}>{t('home.viewActiveRooms')}</button>
+            <span className="home-stats-meta">
+              {t('home.activeRoomsAndWaiting', {
+                activeRooms: liveStats.activeRooms,
+                waitingRooms: liveStats.waitingRooms
+              })}
+            </span>
+            <button
+              className="secondary home-stats-mini-btn"
+              onClick={() => void openActiveRoomsModal()}
+            >
+              {t('home.viewActiveRooms')}
+            </button>
           </div>
         </div>
 
         <div className="home-tabs">
-          <button className={`home-tab ${homeTab === 'agent' ? 'active' : ''}`} onClick={() => setHomeTab('agent')}>
+          <button
+            className={`home-tab ${homeTab === 'agent' ? 'active' : ''}`}
+            onClick={() => setHomeTab('agent')}
+          >
             <Bot size={20} />
             {t('home.tabAgent')}
           </button>
-          <button className={`home-tab ${homeTab === 'human' ? 'active' : ''}`} onClick={() => setHomeTab('human')}>
+          <button
+            className={`home-tab ${homeTab === 'human' ? 'active' : ''}`}
+            onClick={() => setHomeTab('human')}
+          >
             <Users size={20} />
             {t('home.tabHuman')}
           </button>
@@ -76,25 +102,65 @@ export function HomeView(props: HomeViewProps) {
         <div className="home-tab-content">
           {homeTab === 'agent' && (
             <div className="panel prompt-panel home-prompt-panel">
-              <h3 style={{ marginTop: 0, marginBottom: '12px', fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h3
+                style={{
+                  marginTop: 0,
+                  marginBottom: '12px',
+                  fontSize: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px'
+                }}
+              >
                 <Bot size={18} color="#38bdf8" /> {t('home.copyPromptForAgent')}
               </h3>
-              <textarea className="prompt-box" value={homeAgentPrompt} readOnly />
-              <div style={{ marginTop: '12px', display: 'flex', justifyContent: 'flex-end' }}>
-                <button className="secondary" onClick={() => void copyPrompt(homeAgentPrompt, 'home')}>
+              <textarea
+                className="prompt-box"
+                value={homeAgentPrompt}
+                readOnly
+              />
+              <div
+                style={{
+                  marginTop: '12px',
+                  display: 'flex',
+                  justifyContent: 'flex-end'
+                }}
+              >
+                <button
+                  className="secondary"
+                  onClick={() => void copyPrompt(homeAgentPrompt, 'home')}
+                >
                   {copiedHomePrompt ? <Check size={16} /> : <Copy size={16} />}
-                  {copiedHomePrompt ? t('common.copied') : t('common.copyPrompt')}
+                  {copiedHomePrompt
+                    ? t('common.copied')
+                    : t('common.copyPrompt')}
                 </button>
               </div>
             </div>
           )}
 
           {homeTab === 'human' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1rem',
+                marginTop: '1rem'
+              }}
+            >
               <div className="row" style={{ width: '100%' }}>
-                <input style={{ flex: 1 }} value={name} onChange={(e) => setName(e.target.value)} placeholder={t('home.myNamePlaceholder')} />
+                <input
+                  style={{ flex: 1 }}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder={t('home.myNamePlaceholder')}
+                />
                 <div style={{ display: 'flex', gap: '8px' }}>
-                  <button className="secondary" onClick={() => void joinMatchmaking()} style={{ flex: 1 }}>
+                  <button
+                    className="secondary"
+                    onClick={() => void joinMatchmaking()}
+                    style={{ flex: 1 }}
+                  >
                     <Users size={18} /> {t('home.joinMatchmaking')}
                   </button>
                   <button onClick={() => void createRoom()} style={{ flex: 1 }}>
@@ -106,11 +172,25 @@ export function HomeView(props: HomeViewProps) {
               <div className="divider">{t('home.orJoinRoom')}</div>
 
               <div className="row" style={{ width: '100%' }}>
-                <input style={{ flex: 1 }} value={roomInput} onChange={(e) => setRoomInput(e.target.value)} placeholder={t('home.roomIdInputPlaceholder')} />
+                <input
+                  style={{ flex: 1 }}
+                  value={roomInput}
+                  onChange={(e) => setRoomInput(e.target.value)}
+                  placeholder={t('home.roomIdInputPlaceholder')}
+                />
               </div>
               <div className="row" style={{ width: '100%' }}>
-                <input style={{ flex: 1 }} value={joinName} onChange={(e) => setJoinName(e.target.value)} placeholder={t('home.joinNamePlaceholder')} />
-                <button className="secondary" onClick={() => void joinRoom()} disabled={!roomInput}>
+                <input
+                  style={{ flex: 1 }}
+                  value={joinName}
+                  onChange={(e) => setJoinName(e.target.value)}
+                  placeholder={t('home.joinNamePlaceholder')}
+                />
+                <button
+                  className="secondary"
+                  onClick={() => void joinRoom()}
+                  disabled={!roomInput}
+                >
                   <Users size={18} /> {t('home.joinRoom')}
                 </button>
               </div>
@@ -118,7 +198,13 @@ export function HomeView(props: HomeViewProps) {
           )}
         </div>
 
-        {msg && <p style={{ color: '#ef4444', textAlign: 'center', marginTop: '1rem' }}>{msg}</p>}
+        {msg && (
+          <p
+            style={{ color: '#ef4444', textAlign: 'center', marginTop: '1rem' }}
+          >
+            {msg}
+          </p>
+        )}
       </div>
     </div>
   );
