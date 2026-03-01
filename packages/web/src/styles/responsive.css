@@ -103,9 +103,13 @@
     font-size: 0.8rem;
     margin-bottom: 12px;
     width: 100%;
-    flex-wrap: wrap;
     gap: 6px;
     white-space: normal;
+  }
+
+  .board-info-main,
+  .board-info-live {
+    gap: 8px;
   }
 
   .last-move-indicator {

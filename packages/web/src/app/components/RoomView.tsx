@@ -96,19 +96,19 @@ export function RoomView(props: RoomViewProps) {
         <div className="board-wrapper">
           {showGameStart && <div className="game-start-banner title-pixel">{t('room.gameStart')}</div>}
           <div className="board-info">
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div className="board-info-main">
               <span className="status-badge">{state.status === 'playing' ? t('room.status.playing') : state.status === 'finished' ? t('room.status.finished') : t('room.status.waiting')}</span>
               <span>{t('room.currentTurn')}: {state.currentTurn === 1 ? t('room.blackFirst') : t('room.white')}</span>
             </div>
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-              <span>{t('room.moveCount')}: {state.moves}</span>
-              {state.status === 'playing' && (
-                <span style={{ display: 'inline-flex', gap: '4px' }}>
+            {state.status === 'playing' && (
+              <div className="board-info-live">
+                <span>{t('room.moveCount')}: {state.moves}</span>
+                <span className="board-countdown">
                   {t('room.turnCountdown')}:
-                  <span style={{ display: 'inline-block', minWidth: '3.5em', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatCountdown(turnRemainingMs)}</span>
+                  <span>{formatCountdown(turnRemainingMs)}</span>
                 </span>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'center', gap: '24px' }}>

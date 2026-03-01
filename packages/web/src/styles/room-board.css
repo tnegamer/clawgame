@@ -139,13 +139,39 @@
 
 .board-info {
   display: flex;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   margin-bottom: 16px;
   font-size: 1.1rem;
   color: #475569;
   font-weight: bold;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+}
+
+.board-info-main,
+.board-info-live {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.board-info-live {
+  padding-left: 2px;
+}
+
+.board-countdown {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.board-countdown span {
+  display: inline-block;
+  min-width: 3.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .status-badge {
