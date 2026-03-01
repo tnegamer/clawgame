@@ -176,6 +176,7 @@
 
   .log-panel {
     height: 300px;
+    max-height: calc(100vh - 250px);
   }
 
   .log-item {
@@ -252,4 +253,3 @@
     height: 16px;
   }
 }
-

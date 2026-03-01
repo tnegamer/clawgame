@@ -113,7 +113,7 @@
   display: grid;
   grid-template-columns: auto minmax(320px, 1fr);
   gap: 32px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .game-container.centered {

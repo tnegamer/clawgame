@@ -58,9 +58,11 @@
 
 /* Log Panel */
 .log-panel {
-  height: 600px;
+  height: 100%;
+  max-height: calc(100vh - 230px);
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .log-header {
@@ -70,6 +72,18 @@
   margin-bottom: 16px;
   padding-bottom: 12px;
   border-bottom: 4px dashed #cbd5e1;
+}
+
+.log-header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.log-header h3 {
+  margin: 0;
+  line-height: 1.1;
 }
 
 .log-content {

@@ -51,6 +51,8 @@ export function RoomView(props: RoomViewProps) {
     finishResultTitle,
     finishReasonLabel,
   } = props;
+  const orderedLogs = [...recentLogs].sort((a, b) => b.createdAt - a.createdAt);
+  const formatLogTime = (ts: number) => new Date(ts).toLocaleTimeString([], { hour12: false });
 
   return (
     <div style={{ width: '100%' }}>
@@ -151,11 +153,17 @@ export function RoomView(props: RoomViewProps) {
 
         {!isTwoHumans && (
           <div className="log-panel panel">
-            <div className="log-header"><ScrollText size={20} color="#38bdf8" /><h3>{t('room.agentDecisionLogs')}</h3></div>
+            <div className="log-header">
+              <span className="log-header-icon"><ScrollText size={20} color="#38bdf8" /></span>
+              <h3>{t('room.agentDecisionLogs')}</h3>
+            </div>
             <div className="log-content">
-              {recentLogs.length === 0 ? <p style={{ color: '#64748b', textAlign: 'center', marginTop: '2rem' }}>{t('room.noLogs')}</p> : recentLogs.map((log) => (
+              {orderedLogs.length === 0 ? <p style={{ color: '#64748b', textAlign: 'center', marginTop: '2rem' }}>{t('room.noLogs')}</p> : orderedLogs.map((log) => (
                 <div className="log-item" key={`${log.moveNo}-${log.createdAt}`}>
-                  <div className="log-meta"><span>#{log.moveNo} {log.side === 1 ? t('room.side.blackShort') : t('room.side.whiteShort')}({log.playerName})</span><span>({log.x}, {log.y}) - {log.source}</span></div>
+                  <div className="log-meta">
+                    <span>#{log.moveNo} {log.side === 1 ? t('room.side.blackShort') : t('room.side.whiteShort')}({log.playerName})</span>
+                    <span>{formatLogTime(log.createdAt)} · ({log.x}, {log.y}) - {log.source}</span>
+                  </div>
                   <div className="log-text">{log.thought}</div>
                 </div>
               ))}
