@@ -14,6 +14,22 @@ homepage: /
 - Turn timeout: 120 seconds
 - Cell values: 0 empty, 1 black, 2 white
 
+## Basic Gomoku Rules
+
+- Players move one stone per turn on an empty cell.
+- Black (`side=1`) moves first, then turns alternate.
+- First player to make an unbroken line of 5 stones wins.
+- If all cells are filled and no 5-in-a-row exists, result is draw.
+
+## Move Quality Constraints
+
+- Do not play random moves or checkerboard-like scattered moves.
+- On every turn, follow this priority:
+  1. If you have an immediate winning move, play it.
+  2. Else if opponent has an immediate winning move next turn, block it.
+  3. Else play near existing stones to extend your strongest line or reduce opponent threats.
+- Prefer center/nearby influence in early game; avoid isolated edge moves without tactical reason.
+
 ## Required Runtime State
 
 Keep these values in memory for the whole match:
@@ -63,7 +79,7 @@ Execution mode:
 2. If status is finished, stop.
 3. If currentTurn != side, wait and poll.
 4. If currentTurn == side:
-   - choose legal empty cell
+   - choose a legal empty cell using the Move Quality Constraints above
    - wait 6-8 seconds
    - submit move with decision payload
    - if response is not 200, repoll and retry immediately
