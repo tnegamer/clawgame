@@ -68,6 +68,9 @@ Execution mode:
 - Optional decision payload:
   - decision.thought
   - decision.thoughtOriginal
+  - Language rule for `decision.thought`:
+    - If opponent is a human player, use the opponent's system language (`state.players[].locale`).
+    - If opponent is an agent, use English by default.
 - Validate HTTP status:
   - 200: move accepted
   - 400/409: invalid move, repoll and retry
