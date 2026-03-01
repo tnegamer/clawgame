@@ -8,13 +8,10 @@ import {
   type DecisionLog,
   type GameState,
   type PlayerSide,
-  type RulesResponse,
 } from '@clawgame/shared';
-import SKILL_TEMPLATE_RAW from '../skill-template.md';
 
 type Env = {
   LOBBY: DurableObjectNamespace;
-  PUBLIC_BASE_URL?: string;
   TURN_TIMEOUT_MS?: string;
   FINISHED_ROOM_TTL_MS?: string;
   WAITING_ROOM_TTL_MS?: string;
@@ -78,37 +75,18 @@ type AgentMatchHistoryEntry = {
   finishedAt: number;
 };
 
+type LiveStatsPayload = {
+  activePlayers: number;
+  activeRooms: number;
+  waitingRooms: number;
+};
+
 const DEFAULT_TURN_TIMEOUT_MS = 120_000;
 const DEFAULT_FINISHED_ROOM_TTL_MS = 30_000;
 const DEFAULT_WAITING_ROOM_TTL_MS = 300_000;
 const DEFAULT_AGENT_HISTORY_LIMIT = 200;
 const AGENT_ID_KEY_PREFIX = 'agent:id:';
 const AGENT_HISTORY_KEY_PREFIX = 'agent:history:';
-
-const rules: RulesResponse = {
-  game: 'gomoku',
-  boardSize: BOARD_SIZE,
-  winCount: WIN_COUNT,
-  firstMove: 'black',
-  moveRule: 'alternate',
-  objective: 'Place five of your stones consecutively (horizontal, vertical, or diagonal) before opponent.',
-  strategyHints: [
-    'On each turn, check if you have an immediate winning move and play it first.',
-    'If opponent has an immediate winning move next turn, block it immediately.',
-    'Otherwise, extend your longest connected line while preventing strong opponent shapes.',
-    'Prefer moves around existing stones; avoid random checkerboard-like placement.',
-  ],
-  apiGuide: [
-    'POST /api/agent/register to get Agent token',
-    'GET /api/agent/history to query your match history and duration stats (Bearer Agent token)',
-    'POST /api/matchmaking/join to join matchmaking queue',
-    'GET /api/matchmaking/:ticketId to poll matchmaking result',
-    'POST /api/rooms to create room (human only) and get seat token',
-    'POST /api/rooms/:id/join to join room and get seat token',
-    'POST /api/rooms/:id/reconnect to resume seat after interruption',
-    'POST /api/rooms/:id/move to submit a move with seat token',
-  ],
-};
 
 const registerAgentSchema = z.object({
   name: z.string().min(1).max(50),
@@ -156,27 +134,6 @@ function boardEmpty(): Cell[][] {
   return Array.from({ length: BOARD_SIZE }, () =>
     Array.from({ length: BOARD_SIZE }, () => 0 as Cell),
   );
-}
-
-function normalizeBaseUrl(raw: string): string {
-  return raw.trim().replace(/\/+$/, '');
-}
-
-function getPublicBaseUrl(req: Request, env: Env): string {
-  if (env.PUBLIC_BASE_URL?.trim()) {
-    return normalizeBaseUrl(env.PUBLIC_BASE_URL);
-  }
-  const url = new URL(req.url);
-  return normalizeBaseUrl(`${url.protocol}//${url.host}`);
-}
-
-function serverSkillMarkdown(baseUrl: string, turnTimeoutMs: number): string {
-  const turnTimeoutSeconds = Math.floor(turnTimeoutMs / 1000);
-  return SKILL_TEMPLATE_RAW
-    .replaceAll('{{BASE_URL}}', baseUrl)
-    .replaceAll('{{BOARD_SIZE}}', String(BOARD_SIZE))
-    .replaceAll('{{WIN_COUNT}}', String(WIN_COUNT))
-    .replaceAll('{{TURN_TIMEOUT_SECONDS}}', String(turnTimeoutSeconds));
 }
 
 function getBearerToken(req: Request): string | null {
@@ -239,6 +196,7 @@ export class LobbyDO {
   private assignmentByTicket = new Map<string, MatchAssignment>();
   private agentHistoryById = new Map<string, AgentMatchHistoryEntry[]>();
   private socketsByRoom = new Map<string, Set<WebSocket>>();
+  private socketsByTicket = new Map<string, Set<WebSocket>>();
   private readonly ready: Promise<void>;
 
   constructor(
@@ -431,6 +389,24 @@ export class LobbyDO {
       side: rightSeat.side,
       state,
     });
+    this.broadcastTicket(leftTicketId, {
+      type: 'matchmaking',
+      matched: true,
+      ticketId: leftTicketId,
+      roomId: room.id,
+      seatToken: leftSeat.seatToken,
+      side: leftSeat.side,
+      state,
+    });
+    this.broadcastTicket(rightTicketId, {
+      type: 'matchmaking',
+      matched: true,
+      ticketId: rightTicketId,
+      roomId: room.id,
+      seatToken: rightSeat.seatToken,
+      side: rightSeat.side,
+      state,
+    });
     this.waitingByTicket.delete(leftTicketId);
     this.waitingByTicket.delete(rightTicketId);
     this.broadcastRoom(room.id, { type: 'state', state });
@@ -616,12 +592,38 @@ export class LobbyDO {
     }
   }
 
+  private computeLiveStats(): LiveStatsPayload {
+    const activeRooms = Array.from(this.rooms.values()).filter((room) =>
+      room.status === 'waiting' || room.status === 'playing',
+    );
+    const activePlayers = activeRooms.reduce((sum, room) => sum + room.players.length, 0);
+    const waitingRooms =
+      activeRooms.filter((room) => room.status === 'waiting' && room.players.length === 1).length +
+      this.waitingByTicket.size;
+    return { activePlayers, activeRooms: activeRooms.length, waitingRooms };
+  }
+
   private broadcastRoom(roomId: string, payload: unknown): void {
     const clients = this.socketsByRoom.get(roomId);
     if (!clients || clients.size === 0) {
       return;
     }
 
+    const serialized = JSON.stringify(payload);
+    for (const ws of clients) {
+      try {
+        ws.send(serialized);
+      } catch {
+        // ignore dead socket
+      }
+    }
+  }
+
+  private broadcastTicket(ticketId: string, payload: unknown): void {
+    const clients = this.socketsByTicket.get(ticketId);
+    if (!clients || clients.size === 0) {
+      return;
+    }
     const serialized = JSON.stringify(payload);
     for (const ws of clients) {
       try {
@@ -689,6 +691,80 @@ export class LobbyDO {
     }
   }
 
+  private async applyMove(
+    roomId: string,
+    seatToken: string | null,
+    move: z.infer<typeof moveSchema>,
+  ): Promise<{ status: number; body: unknown }> {
+    if (!seatToken) {
+      return { status: 401, body: { error: 'missing seat token' } };
+    }
+
+    const seat = this.seatTokenIndex.get(seatToken);
+    if (!seat || seat.roomId !== roomId) {
+      return { status: 401, body: { error: 'invalid seat token' } };
+    }
+
+    const room = this.rooms.get(roomId);
+    if (!room) {
+      return { status: 404, body: { error: 'room not found' } };
+    }
+
+    await this.settleTurnTimeout(room);
+    if (room.status !== 'playing') {
+      return { status: 409, body: { error: 'game not in playing status' } };
+    }
+
+    if (room.currentTurn !== seat.side) {
+      return { status: 409, body: { error: 'not your turn' } };
+    }
+
+    const { x, y } = move;
+    if (room.board[y][x] !== 0) {
+      return { status: 409, body: { error: 'cell already occupied' } };
+    }
+
+    room.board[y][x] = seat.side;
+    room.lastActiveAt[seat.side] = Date.now();
+    room.moves += 1;
+    room.lastMove = { x, y, side: seat.side };
+    const player = room.players.find((p) => p.side === seat.side);
+    if (move.decision && player) {
+      room.decisionLogs.push({
+        moveNo: room.moves,
+        side: seat.side,
+        playerName: player.name,
+        x,
+        y,
+        source: player.actorType === 'agent' ? 'agent' : 'heuristic',
+        thought: move.decision.thought,
+        thoughtOriginal: move.decision.thoughtOriginal,
+        createdAt: Date.now(),
+      });
+    }
+
+    if (this.checkWinner(room.board, x, y, seat.side)) {
+      room.status = 'finished';
+      room.winner = seat.side;
+      room.finishReason = 'win';
+      await this.settleAgentStats(room);
+      this.scheduleFinishedRoomRecycle(room);
+    } else if (room.moves >= BOARD_SIZE * BOARD_SIZE) {
+      room.status = 'finished';
+      room.winner = 0;
+      room.finishReason = 'draw_board_full';
+      await this.settleAgentStats(room);
+      this.scheduleFinishedRoomRecycle(room);
+    } else {
+      room.currentTurn = room.currentTurn === 1 ? 2 : 1;
+      room.lastActiveAt[room.currentTurn] = Date.now();
+    }
+
+    const state = this.roomToState(room);
+    this.broadcastRoom(room.id, { type: 'state', state });
+    return { status: 200, body: state };
+  }
+
   private handleWs(req: Request): Response {
     const upgrade = req.headers.get('Upgrade');
     if (!upgrade || upgrade.toLowerCase() !== 'websocket') {
@@ -697,10 +773,91 @@ export class LobbyDO {
 
     const url = new URL(req.url);
     const roomId = url.searchParams.get('roomId');
+    const ticketId = url.searchParams.get('ticketId');
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
     server.accept();
+    server.addEventListener('message', (event) => {
+      void (async () => {
+        try {
+          const raw = typeof event.data === 'string' ? event.data : '';
+          if (!raw) {
+            return;
+          }
+          const payload = JSON.parse(raw) as Record<string, unknown>;
+          const messageType = typeof payload.type === 'string' ? payload.type : '';
+
+          if (messageType === 'live_request') {
+            await this.settleAllTurnTimeouts();
+            server.send(JSON.stringify({ type: 'live', ...this.computeLiveStats() }));
+            return;
+          }
+
+          if (messageType === 'move') {
+            const requestId = typeof payload.requestId === 'string' ? payload.requestId : '';
+            const targetRoomIdRaw = typeof payload.roomId === 'string' ? payload.roomId : roomId;
+            const targetRoomId = targetRoomIdRaw ?? '';
+            const targetSeatToken = typeof payload.seatToken === 'string' ? payload.seatToken : '';
+            if (!targetRoomId) {
+              server.send(JSON.stringify({
+                type: 'move_result',
+                requestId,
+                ok: false,
+                status: 400,
+                error: 'missing room id',
+              }));
+              return;
+            }
+            if (!targetSeatToken) {
+              server.send(JSON.stringify({
+                type: 'move_result',
+                requestId,
+                ok: false,
+                status: 401,
+                error: 'missing seat token',
+              }));
+              return;
+            }
+            const parsedMove = moveSchema.safeParse({
+              x: payload.x,
+              y: payload.y,
+              decision: payload.decision,
+            });
+            if (!parsedMove.success) {
+              server.send(JSON.stringify({
+                type: 'move_result',
+                requestId,
+                ok: false,
+                status: 400,
+                error: parsedMove.error.flatten(),
+              }));
+              return;
+            }
+
+            const result = await this.applyMove(targetRoomId, targetSeatToken, parsedMove.data);
+            if (result.status === 200) {
+              server.send(JSON.stringify({
+                type: 'move_result',
+                requestId,
+                ok: true,
+                state: result.body,
+              }));
+            } else {
+              server.send(JSON.stringify({
+                type: 'move_result',
+                requestId,
+                ok: false,
+                status: result.status,
+                error: (result.body as { error?: unknown })?.error ?? 'move failed',
+              }));
+            }
+          }
+        } catch {
+          // ignore malformed ws message
+        }
+      })();
+    });
 
     if (roomId) {
       const set = this.socketsByRoom.get(roomId) ?? new Set<WebSocket>();
@@ -723,6 +880,40 @@ export class LobbyDO {
         }
       };
 
+      server.addEventListener('close', cleanup);
+      server.addEventListener('error', cleanup);
+    }
+
+    if (ticketId) {
+      const set = this.socketsByTicket.get(ticketId) ?? new Set<WebSocket>();
+      set.add(server);
+      this.socketsByTicket.set(ticketId, set);
+
+      const assignment = this.assignmentByTicket.get(ticketId);
+      if (assignment) {
+        server.send(JSON.stringify({
+          type: 'matchmaking',
+          matched: true,
+          ticketId: assignment.ticketId,
+          roomId: assignment.roomId,
+          seatToken: assignment.seatToken,
+          side: assignment.side,
+          state: assignment.state,
+        }));
+      } else if (this.waitingByTicket.has(ticketId)) {
+        server.send(JSON.stringify({ type: 'matchmaking', matched: false, ticketId }));
+      }
+
+      const cleanup = () => {
+        const current = this.socketsByTicket.get(ticketId);
+        if (!current) {
+          return;
+        }
+        current.delete(server);
+        if (current.size === 0) {
+          this.socketsByTicket.delete(ticketId);
+        }
+      };
       server.addEventListener('close', cleanup);
       server.addEventListener('error', cleanup);
     }
@@ -751,35 +942,7 @@ export class LobbyDO {
 
     if (req.method === 'GET' && pathname === '/api/stats/live') {
       await this.settleAllTurnTimeouts();
-      const activeRooms = Array.from(this.rooms.values()).filter((room) =>
-        room.status === 'waiting' || room.status === 'playing',
-      );
-      const activePlayers = activeRooms.reduce((sum, room) => sum + room.players.length, 0);
-      const waitingRooms = activeRooms.filter((room) => room.status === 'waiting' && room.players.length === 1).length + this.waitingByTicket.size;
-      return json({ activePlayers, activeRooms: activeRooms.length, waitingRooms });
-    }
-
-    if (req.method === 'GET' && pathname === '/api/rules') {
-      return json(rules);
-    }
-
-    if (req.method === 'GET' && pathname === '/skill.md') {
-      const baseUrl = getPublicBaseUrl(req, this.env);
-      return text(serverSkillMarkdown(baseUrl, this.turnTimeoutMs()), 'text/markdown; charset=utf-8');
-    }
-
-    if (req.method === 'GET' && pathname === '/skill.json') {
-      const baseUrl = getPublicBaseUrl(req, this.env);
-      return json({
-        name: 'clawgame-gomoku',
-        version: '1.0.0',
-        description: 'Join and play Gomoku as an external agent; server is referee only.',
-        homepage: baseUrl,
-        files: {
-          skill: `${baseUrl}/skill.md`,
-          package: `${baseUrl}/skill.json`,
-        },
-      });
+      return json(this.computeLiveStats());
     }
 
     if (req.method === 'POST' && pathname === '/api/agent/register') {
@@ -1192,75 +1355,8 @@ export class LobbyDO {
       if (!parsedMove.success) {
         return json({ error: parsedMove.error.flatten() }, 400);
       }
-
-      const seatToken = getBearerToken(req);
-      if (!seatToken) {
-        return json({ error: 'missing seat token' }, 401);
-      }
-
-      const seat = this.seatTokenIndex.get(seatToken);
-      if (!seat || seat.roomId !== roomId) {
-        return json({ error: 'invalid seat token' }, 401);
-      }
-
-      const room = this.rooms.get(roomId);
-      if (!room) {
-        return json({ error: 'room not found' }, 404);
-      }
-
-      await this.settleTurnTimeout(room);
-      if (room.status !== 'playing') {
-        return json({ error: 'game not in playing status' }, 409);
-      }
-
-      if (room.currentTurn !== seat.side) {
-        return json({ error: 'not your turn' }, 409);
-      }
-
-      const { x, y } = parsedMove.data;
-      if (room.board[y][x] !== 0) {
-        return json({ error: 'cell already occupied' }, 409);
-      }
-
-      room.board[y][x] = seat.side;
-      room.lastActiveAt[seat.side] = Date.now();
-      room.moves += 1;
-      room.lastMove = { x, y, side: seat.side };
-      const player = room.players.find((p) => p.side === seat.side);
-      if (parsedMove.data.decision && player) {
-        room.decisionLogs.push({
-          moveNo: room.moves,
-          side: seat.side,
-          playerName: player.name,
-          x,
-          y,
-          source: player.actorType === 'agent' ? 'agent' : 'heuristic',
-          thought: parsedMove.data.decision.thought,
-          thoughtOriginal: parsedMove.data.decision.thoughtOriginal,
-          createdAt: Date.now(),
-        });
-      }
-
-      if (this.checkWinner(room.board, x, y, seat.side)) {
-        room.status = 'finished';
-        room.winner = seat.side;
-        room.finishReason = 'win';
-        await this.settleAgentStats(room);
-        this.scheduleFinishedRoomRecycle(room);
-      } else if (room.moves >= BOARD_SIZE * BOARD_SIZE) {
-        room.status = 'finished';
-        room.winner = 0;
-        room.finishReason = 'draw_board_full';
-        await this.settleAgentStats(room);
-        this.scheduleFinishedRoomRecycle(room);
-      } else {
-        room.currentTurn = room.currentTurn === 1 ? 2 : 1;
-        room.lastActiveAt[room.currentTurn] = Date.now();
-      }
-
-      const state = this.roomToState(room);
-      this.broadcastRoom(room.id, { type: 'state', state });
-      return json(state);
+      const result = await this.applyMove(roomId, getBearerToken(req), parsedMove.data);
+      return json(result.body, result.status);
     }
 
     return json({ error: 'not found' }, 404);

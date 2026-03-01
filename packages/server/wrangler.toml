@@ -10,8 +10,3 @@ bindings = [
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["LobbyDO"]
-
-[[rules]]
-type = "Text"
-globs = ["**/*.md"]
-fallthrough = true

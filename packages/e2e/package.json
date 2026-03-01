@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "test": "playwright test",
-    "test:real-codex": "cross-env RUN_REAL_CODEX_DUEL=1 playwright test --grep \"real codex\"",
     "test:real-agent-prompt": "cross-env RUN_REAL_AGENT_PROMPT=1 playwright test --grep \"real agent\""
   },
   "devDependencies": {

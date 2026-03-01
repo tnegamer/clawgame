@@ -2,10 +2,6 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 function inferSkillUrl(): string {
-  const apiBaseUrl = process.env.VITE_API_BASE_URL?.trim().replace(/\/+$/, '');
-  if (apiBaseUrl) {
-    return `${apiBaseUrl}/skill.md`;
-  }
   return '/skill.md';
 }
 

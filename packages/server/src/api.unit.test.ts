@@ -59,19 +59,6 @@ describe.sequential('server api coverage', () => {
     const health = await jsonRequest<{ ok: boolean; rooms: number; agentPlayers: number }>('/health');
     expect(health.status).toBe(200);
     expect(health.data.ok).toBe(true);
-
-    const rules = await jsonRequest<{ apiGuide: string[] }>('/api/rules');
-    expect(rules.status).toBe(200);
-    expect(rules.data.apiGuide.length).toBeGreaterThan(0);
-
-    const skillMdRes = await fetch(`${baseUrl}/skill.md`);
-    expect(skillMdRes.status).toBe(200);
-    const skillMd = await skillMdRes.text();
-    expect(skillMd).toContain('/api/matchmaking/join');
-
-    const skillJson = await jsonRequest<{ homepage: string; files: { skill: string } }>('/skill.json');
-    expect(skillJson.status).toBe(200);
-    expect(skillJson.data.files.skill).toContain('/skill.md');
   });
 
   it('covers agent identity endpoints', async () => {

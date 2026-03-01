@@ -240,6 +240,15 @@ export default function App() {
   }, [state.status, state.moves, state.roomId]);
   const roomAlertedRef = useRef(false);
   const joinPromptedRoomRef = useRef<string | null>(null);
+  const roomWsRef = useRef<WebSocket | null>(null);
+  const moveReqSeqRef = useRef(0);
+  const pendingMoveRef = useRef(
+    new Map<string, {
+      resolve: (state: GameState) => void;
+      reject: (error: Error) => void;
+      timer: number;
+    }>(),
+  );
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('theme') as 'light' | 'dark') ||
       (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -318,18 +327,35 @@ export default function App() {
   }, [roomId, state.status]);
 
   useEffect(() => {
-    const fetchLiveStats = async () => {
-      try {
-        const next = await jsonFetch<LiveStats>(apiUrl('/api/stats/live'));
-        setLiveStats(next);
-      } catch {
-        // ignore in home stats poll
+    const ws = new WebSocket(wsUrl('/ws?live=1'));
+    const requestLive = () => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'live_request' }));
       }
     };
-
-    fetchLiveStats();
-    const timer = setInterval(fetchLiveStats, 5000);
-    return () => clearInterval(timer);
+    ws.onopen = () => {
+      requestLive();
+    };
+    ws.onmessage = (evt) => {
+      try {
+        const payload = JSON.parse(evt.data) as { type: string; activePlayers?: number; activeRooms?: number; waitingRooms?: number };
+        if (payload.type !== 'live') {
+          return;
+        }
+        setLiveStats({
+          activePlayers: payload.activePlayers ?? 0,
+          activeRooms: payload.activeRooms ?? 0,
+          waitingRooms: payload.waitingRooms ?? 0,
+        });
+      } catch {
+        // ignore malformed ws live message
+      }
+    };
+    const timer = setInterval(requestLive, 5000);
+    return () => {
+      clearInterval(timer);
+      ws.close();
+    };
   }, []);
 
   const websocketParseFailed = t('messages.websocketParseFailed');
@@ -339,12 +365,35 @@ export default function App() {
     }
 
     const ws = new WebSocket(wsUrl(`/ws?roomId=${roomId}`));
+    roomWsRef.current = ws;
     ws.onmessage = (evt) => {
       try {
-        const payload = JSON.parse(evt.data) as { type: string; state?: GameState };
+        const payload = JSON.parse(evt.data) as {
+          type: string;
+          state?: GameState;
+          requestId?: string;
+          ok?: boolean;
+          status?: number;
+          error?: string;
+        };
         if (payload.type === 'state') {
           if (payload.state) {
             setState(payload.state);
+          }
+          return;
+        }
+        if (payload.type === 'move_result') {
+          const requestId = payload.requestId ?? '';
+          const pending = pendingMoveRef.current.get(requestId);
+          if (!pending) {
+            return;
+          }
+          clearTimeout(pending.timer);
+          pendingMoveRef.current.delete(requestId);
+          if (payload.ok && payload.state) {
+            pending.resolve(payload.state);
+          } else {
+            pending.reject(new Error(payload.error ?? `move failed (${payload.status ?? 500})`));
           }
           return;
         }
@@ -358,22 +407,16 @@ export default function App() {
       }
     };
 
-    const timer = setInterval(async () => {
-      try {
-        const next = await jsonFetch<GameState>(apiUrl(`/api/rooms/${roomId}/state`), {
-          headers: authHeaders(seatToken),
-        });
-        setState(next);
-      } catch {
-        clearRoomSession(roomId);
-        clearLastRoomId();
-        alertAndBackHome(t('messages.noActiveBattle'));
-      }
-    }, 1000);
-
     return () => {
+      if (roomWsRef.current === ws) {
+        roomWsRef.current = null;
+      }
+      for (const [, pending] of pendingMoveRef.current) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error('room connection closed'));
+      }
+      pendingMoveRef.current.clear();
       ws.close();
-      clearInterval(timer);
     };
   }, [roomId, seatToken, websocketParseFailed, t]);
 
@@ -642,24 +685,53 @@ export default function App() {
       }
 
       setMsg(t('messages.matchmakingWaiting'));
-      const deadline = Date.now() + 120_000;
-      while (Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-        const polled = await jsonFetch<{
-          matched: boolean;
-          ticketId: string;
-          roomId?: string;
-          seatToken?: string;
-          side?: 1 | 2;
-          state?: GameState;
-        }>(apiUrl(`/api/matchmaking/${joined.ticketId}`));
-        if (polled.matched && polled.roomId && polled.seatToken && polled.side && polled.state) {
-          applyMatch({ roomId: polled.roomId, seatToken: polled.seatToken, side: polled.side, state: polled.state });
-          return;
-        }
-      }
+      const matched = await new Promise<{
+        roomId: string;
+        seatToken: string;
+        side: 1 | 2;
+        state: GameState;
+      }>((resolve, reject) => {
+        const ws = new WebSocket(wsUrl(`/ws?ticketId=${joined.ticketId}`));
+        const timer = setTimeout(() => {
+          ws.close();
+          reject(new Error(t('messages.matchmakingTimeout')));
+        }, 120_000);
 
-      throw new Error(t('messages.matchmakingTimeout'));
+        ws.onmessage = (evt) => {
+          try {
+            const payload = JSON.parse(evt.data) as {
+              type: string;
+              matched?: boolean;
+              roomId?: string;
+              seatToken?: string;
+              side?: 1 | 2;
+              state?: GameState;
+            };
+            if (payload.type !== 'matchmaking') {
+              return;
+            }
+            if (payload.matched && payload.roomId && payload.seatToken && payload.side && payload.state) {
+              clearTimeout(timer);
+              ws.close();
+              resolve({
+                roomId: payload.roomId,
+                seatToken: payload.seatToken,
+                side: payload.side,
+                state: payload.state,
+              });
+            }
+          } catch {
+            // ignore malformed ws payload
+          }
+        };
+
+        ws.onerror = () => {
+          clearTimeout(timer);
+          ws.close();
+          reject(new Error(t('messages.matchmakingTimeout')));
+        };
+      });
+      applyMatch(matched);
     } catch (e) {
       setMsg(`${t('messages.joinFailed')}: ${(e as Error).message}`);
     }
@@ -667,12 +739,28 @@ export default function App() {
 
   async function place(x: number, y: number) {
     if (!roomId || !seatToken) return;
+    const ws = roomWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      setMsg(t('messages.websocketParseFailed'));
+      return;
+    }
 
     try {
-      const next = await jsonFetch<GameState>(apiUrl(`/api/rooms/${roomId}/move`), {
-        method: 'POST',
-        headers: { authorization: `Bearer ${seatToken}` },
-        body: JSON.stringify({ x, y }),
+      const requestId = `${Date.now()}-${++moveReqSeqRef.current}`;
+      const next = await new Promise<GameState>((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          pendingMoveRef.current.delete(requestId);
+          reject(new Error('move request timeout'));
+        }, 10_000);
+        pendingMoveRef.current.set(requestId, { resolve, reject, timer });
+        ws.send(JSON.stringify({
+          type: 'move',
+          requestId,
+          roomId,
+          seatToken,
+          x,
+          y,
+        }));
       });
       setState(next);
       setMsg('');
@@ -706,12 +794,7 @@ export default function App() {
     state.status === 'playing' && state.turnDeadlineAt
       ? Math.max(0, state.turnDeadlineAt - nowTs)
       : 0;
-  const inferredSkillUrl = apiBaseUrl
-    ? `${apiBaseUrl}/skill.md`
-    : import.meta.env.DEV
-      ? `${window.location.protocol}//${window.location.hostname}:8787/skill.md`
-      : `${window.location.origin}/skill.md`;
-  const skillUrl = inferredSkillUrl;
+  const skillUrl = `${window.location.origin}/skill.md`;
   const homeAgentPrompt = t('prompts.home', { skillUrl });
   const roomAgentPrompt = roomId
     ? t('prompts.room', { skillUrl, roomId })

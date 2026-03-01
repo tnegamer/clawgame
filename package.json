@@ -19,7 +19,6 @@
     "start": "npm run start -w @clawgame/server",
     "test:unit:server": "npm run test:unit -w @clawgame/server",
     "test:e2e": "npm run test -w @clawgame/e2e",
-    "test:e2e:codex": "cross-env RUN_REAL_CODEX_DUEL=1 npm run test -w @clawgame/e2e -- --grep \"real codex\"",
     "test:e2e:real-agent": "cross-env RUN_REAL_AGENT_PROMPT=1 npm run test -w @clawgame/e2e -- --grep \"real agent\""
   },
   "devDependencies": {

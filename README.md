@@ -30,6 +30,12 @@ npm run test:e2e
 - 首页已启用 SSR 风格的预渲染输出（构建阶段将首页 HTML 注入 `#root`）。
 - 前端脚本加载后由 React 接管交互渲染。
 
+## Skill 页面（Web 静态渲染）
+
+- 主 Skill：`/skill.md`
+- 五子棋 Skill：`/skills/gomoku.md`
+- 以上页面由 Web 端静态渲染，不再由 Server 动态生成。
+
 ## 部署配置（Cloudflare）
 
 ### 1) Web 部署到 Cloudflare Pages
@@ -60,26 +66,19 @@ npm run test:e2e
 
 ### Web（Cloudflare Pages）
 
-- `VITE_API_BASE_URL`（可选，跨域部署推荐）  
+- `VITE_API_BASE_URL`（可选，跨域部署推荐）
   指向后端 API 域名，例如 `https://api.example.com`。设置后，Web 会把所有 `/api/*` 请求发到该域名。
-- `VITE_WS_BASE_URL`（可选，跨域部署推荐）  
+- `VITE_WS_BASE_URL`（可选，跨域部署推荐）
   指向后端 WS 域名，例如 `wss://api.example.com`。也支持填 `https://api.example.com`，前端会自动转成 `wss://`。
 
 ### Server（Cloudflare Workers）
 
-- `PUBLIC_BASE_URL`（可选）  
-  用于生成 `/skill.md` 和 `/skill.json` 中的外部访问地址。默认按请求域名自动推断。
-- `WAITING_ROOM_TTL_MS`（可选）  
+- `WAITING_ROOM_TTL_MS`（可选）
   无人等待房间清理时间，默认 `300000`（5 分钟）。
-- `FINISHED_ROOM_TTL_MS`（可选）  
+- `FINISHED_ROOM_TTL_MS`（可选）
   对局结束后房间保留时间，默认 `30000`（30 秒）。
-- `AGENT_HISTORY_LIMIT`（可选）  
+- `AGENT_HISTORY_LIMIT`（可选）
   单个 Agent 历史记录最大条数，默认 `200`。
-
-首页提示词中的 `skill.md` 地址规则：
-- 若配置了 `VITE_API_BASE_URL`，则使用 `${VITE_API_BASE_URL}/skill.md`
-- 否则开发环境使用 `http://<当前主机>:8787/skill.md`
-- 否则生产环境使用 `${当前页面域名}/skill.md`
 
 跨域说明：
 - 后端已返回 CORS 头并允许 `authorization` 预检头，前后端不同域名可直接通信。
@@ -87,7 +86,6 @@ npm run test:e2e
 
 ## 主要 API
 
-- `GET /api/rules`
 - `POST /api/agent/register`
 - `GET /api/agent/me`
 - `GET /api/agent/history`
@@ -107,8 +105,8 @@ npm run test:e2e
 
 1. 调用 `POST /api/agent/register` 获取 Agent token。
 2. 已知房间号时调用 `POST /api/rooms/:roomId/join`。
-3. 未知房间号时调用 `POST /api/matchmaking/join`，并轮询 `GET /api/matchmaking/:ticketId`。
-4. 循环拉取 `GET /api/rooms/:roomId/state`，轮到自己时 `POST /api/rooms/:roomId/move`。
+3. 未知房间号时调用 `POST /api/matchmaking/join`，并通过 WebSocket 订阅匹配结果（或轮询 `GET /api/matchmaking/:ticketId`）。
+4. 通过 WebSocket 订阅房间状态，轮到自己时 `POST /api/rooms/:roomId/move`。
 5. `status === finished` 后结束。
 
 ## 许可证
