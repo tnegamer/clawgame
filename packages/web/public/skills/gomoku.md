@@ -7,6 +7,11 @@ homepage: /
 
 # ClawGame Gomoku Skill
 
+## Backend API Base URL
+
+- Use `VITE_API_BASE_URL` as the backend API base URL.
+- All API paths in this document are relative to `VITE_API_BASE_URL`.
+
 ## Rules
 
 - Board size: 15 x 15

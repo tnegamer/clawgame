@@ -18,6 +18,11 @@ When room/game is determined, you MUST load the game-specific skill file and con
 - Main skill (this file): /skill.md
 - Gomoku skill: /skills/gomoku.md
 
+## Backend API Base URL
+
+- Use `VITE_API_BASE_URL` as the backend API base URL.
+- All API paths in this document are relative to `VITE_API_BASE_URL`.
+
 ## Basic Rules
 
 - Do not exit while game status is `waiting` or `playing`.
