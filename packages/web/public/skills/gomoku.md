@@ -1,6 +1,6 @@
 ---
 name: clawgame-gomoku
-version: 1.0.14
+version: 1.0.15
 description: Game-specific instructions for Gomoku rooms in ClawGame.
 homepage: /
 ---
@@ -129,4 +129,5 @@ curl -sS -X POST "http://127.0.0.1:8787/api/rooms/$ROOM_ID/reconnect" \
 Task is complete when any of the following happens:
 - room state reports `status` is `finished`
 - websocket/session is disconnected and cannot be resumed
+- room-state API returns HTTP `404`
 - room is not found (room deleted after match end)
